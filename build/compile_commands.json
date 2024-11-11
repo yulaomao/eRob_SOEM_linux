@@ -1,0 +1,92 @@
+[
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatbase.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatbase.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatbase.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatcoe.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatcoe.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatcoe.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatconfig.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatconfig.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatconfig.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatdc.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatdc.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatdc.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercateoe.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercateoe.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercateoe.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatfoe.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatfoe.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatfoe.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatmain.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatmain.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatmain.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatprint.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatprint.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatprint.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/soem/ethercatsoe.c.o -c /home/erobman/test_project/SOEM-master/soem/ethercatsoe.c",
+  "file": "/home/erobman/test_project/SOEM-master/soem/ethercatsoe.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/osal/linux/osal.c.o -c /home/erobman/test_project/SOEM-master/osal/linux/osal.c",
+  "file": "/home/erobman/test_project/SOEM-master/osal/linux/osal.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/oshw/linux/nicdrv.c.o -c /home/erobman/test_project/SOEM-master/oshw/linux/nicdrv.c",
+  "file": "/home/erobman/test_project/SOEM-master/oshw/linux/nicdrv.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o CMakeFiles/soem.dir/oshw/linux/oshw.c.o -c /home/erobman/test_project/SOEM-master/oshw/linux/oshw.c",
+  "file": "/home/erobman/test_project/SOEM-master/oshw/linux/oshw.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o test/simple_ng/CMakeFiles/simple_ng.dir/simple_ng.c.o -c /home/erobman/test_project/SOEM-master/test/simple_ng/simple_ng.c",
+  "file": "/home/erobman/test_project/SOEM-master/test/simple_ng/simple_ng.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o test/linux/slaveinfo/CMakeFiles/slaveinfo.dir/slaveinfo.c.o -c /home/erobman/test_project/SOEM-master/test/linux/slaveinfo/slaveinfo.c",
+  "file": "/home/erobman/test_project/SOEM-master/test/linux/slaveinfo/slaveinfo.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o test/linux/eepromtool/CMakeFiles/eepromtool.dir/eepromtool.c.o -c /home/erobman/test_project/SOEM-master/test/linux/eepromtool/eepromtool.c",
+  "file": "/home/erobman/test_project/SOEM-master/test/linux/eepromtool/eepromtool.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/gcc -I/home/erobman/SOEM_ethercat/install/SOEM/include/soem -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux  -Wall -Wextra -Werror -g -o test/linux/simple_test/CMakeFiles/simple_test.dir/simple_test.c.o -c /home/erobman/test_project/SOEM-master/test/linux/simple_test/simple_test.c",
+  "file": "/home/erobman/test_project/SOEM-master/test/linux/simple_test/simple_test.c"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/g++ -I/home/erobman/SOEM_ethercat/install/SOEM/include/soem -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux -g -o test/linux/simple_test/CMakeFiles/eRob_test.dir/eRob_test.cpp.o -c /home/erobman/test_project/SOEM-master/test/linux/simple_test/eRob_test.cpp",
+  "file": "/home/erobman/test_project/SOEM-master/test/linux/simple_test/eRob_test.cpp"
+},
+{
+  "directory": "/home/erobman/test_project/SOEM-master/build",
+  "command": "/usr/bin/g++ -I/home/erobman/SOEM_ethercat/install/SOEM/include/soem -I/home/erobman/test_project/SOEM-master/soem -I/home/erobman/test_project/SOEM-master/osal -I/home/erobman/test_project/SOEM-master/osal/linux -I/home/erobman/test_project/SOEM-master/oshw/linux -g -o test/linux/simple_test/CMakeFiles/github_test.dir/github.cpp.o -c /home/erobman/test_project/SOEM-master/test/linux/simple_test/github.cpp",
+  "file": "/home/erobman/test_project/SOEM-master/test/linux/simple_test/github.cpp"
+}
+]

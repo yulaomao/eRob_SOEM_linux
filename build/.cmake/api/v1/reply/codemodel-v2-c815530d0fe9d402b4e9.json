@@ -1,0 +1,200 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1,
+						2,
+						3,
+						4
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Debug-e4212b7015735e6fab8f.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						6
+					]
+				},
+				{
+					"build" : "test/simple_ng",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.simple_ng-Debug-c1a4efcbaaec861ed3fb.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "test/simple_ng",
+					"targetIndexes" : 
+					[
+						3
+					]
+				},
+				{
+					"build" : "test/linux/slaveinfo",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.linux.slaveinfo-Debug-4f2861bd95b10b36059d.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "test/linux/slaveinfo",
+					"targetIndexes" : 
+					[
+						5
+					]
+				},
+				{
+					"build" : "test/linux/eepromtool",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.linux.eepromtool-Debug-b181da16b222c3783622.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "test/linux/eepromtool",
+					"targetIndexes" : 
+					[
+						1
+					]
+				},
+				{
+					"build" : "test/linux/simple_test",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.linux.simple_test-Debug-6d0c85bceb8cf3e6bcf8.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.8"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 1,
+					"source" : "test/linux/simple_test",
+					"targetIndexes" : 
+					[
+						0,
+						2,
+						4
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"childIndexes" : 
+					[
+						1
+					],
+					"directoryIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3
+					],
+					"name" : "SOEM",
+					"targetIndexes" : 
+					[
+						1,
+						3,
+						5,
+						6
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						4
+					],
+					"name" : "eRob_test",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						0,
+						2,
+						4
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 4,
+					"id" : "eRob_test::@191e0dc8f4df75f9d790",
+					"jsonFile" : "target-eRob_test-Debug-c19ae8f52aa5d893acff.json",
+					"name" : "eRob_test",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 3,
+					"id" : "eepromtool::@1a405a2744c8a4f494c9",
+					"jsonFile" : "target-eepromtool-Debug-782c5b0a83404f7d264e.json",
+					"name" : "eepromtool",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 4,
+					"id" : "github_test::@191e0dc8f4df75f9d790",
+					"jsonFile" : "target-github_test-Debug-781db6a2474289f129b0.json",
+					"name" : "github_test",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "simple_ng::@c85193c515561b6ed8b7",
+					"jsonFile" : "target-simple_ng-Debug-f16e43cd6f078c6e9307.json",
+					"name" : "simple_ng",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 4,
+					"id" : "simple_test::@191e0dc8f4df75f9d790",
+					"jsonFile" : "target-simple_test-Debug-f7ffce6408aa182c0043.json",
+					"name" : "simple_test",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 2,
+					"id" : "slaveinfo::@3451288a7b55caeda638",
+					"jsonFile" : "target-slaveinfo-Debug-eb19ff332b7f49a2844d.json",
+					"name" : "slaveinfo",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "soem::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-soem-Debug-93a61e02a9df9bfd3497.json",
+					"name" : "soem",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/erobman/test_project/SOEM-master/build",
+		"source" : "/home/erobman/test_project/SOEM-master"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}

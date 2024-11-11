@@ -1,0 +1,200 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1,
+						2,
+						3,
+						4
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Debug-eef94499e55c3e825c69.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						6
+					]
+				},
+				{
+					"build" : "test/simple_ng",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.simple_ng-Debug-14e4e7441befb8576be4.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "test/simple_ng",
+					"targetIndexes" : 
+					[
+						3
+					]
+				},
+				{
+					"build" : "test/linux/slaveinfo",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.linux.slaveinfo-Debug-89d733c8e796135f9aa0.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "test/linux/slaveinfo",
+					"targetIndexes" : 
+					[
+						5
+					]
+				},
+				{
+					"build" : "test/linux/eepromtool",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.linux.eepromtool-Debug-978dfb1c35a74991ddea.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.9"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "test/linux/eepromtool",
+					"targetIndexes" : 
+					[
+						1
+					]
+				},
+				{
+					"build" : "test/linux/simple_test",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-test.linux.simple_test-Debug-1276be83a5f10bf5d4c5.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.8"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 1,
+					"source" : "test/linux/simple_test",
+					"targetIndexes" : 
+					[
+						0,
+						2,
+						4
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"childIndexes" : 
+					[
+						1
+					],
+					"directoryIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3
+					],
+					"name" : "SOEM",
+					"targetIndexes" : 
+					[
+						1,
+						3,
+						5,
+						6
+					]
+				},
+				{
+					"directoryIndexes" : 
+					[
+						4
+					],
+					"name" : "eRob_test",
+					"parentIndex" : 0,
+					"targetIndexes" : 
+					[
+						0,
+						2,
+						4
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 4,
+					"id" : "eRob_test::@191e0dc8f4df75f9d790",
+					"jsonFile" : "target-eRob_test-Debug-a1ff6062748bd0ee7d44.json",
+					"name" : "eRob_test",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 3,
+					"id" : "eepromtool::@1a405a2744c8a4f494c9",
+					"jsonFile" : "target-eepromtool-Debug-8d53667b269b5da28427.json",
+					"name" : "eepromtool",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 4,
+					"id" : "github_test::@191e0dc8f4df75f9d790",
+					"jsonFile" : "target-github_test-Debug-1f52920007cfa44e9a5b.json",
+					"name" : "github_test",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "simple_ng::@c85193c515561b6ed8b7",
+					"jsonFile" : "target-simple_ng-Debug-e12ed601de58c0d79c48.json",
+					"name" : "simple_ng",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 4,
+					"id" : "simple_test::@191e0dc8f4df75f9d790",
+					"jsonFile" : "target-simple_test-Debug-8ab7f527dbd9b69f8254.json",
+					"name" : "simple_test",
+					"projectIndex" : 1
+				},
+				{
+					"directoryIndex" : 2,
+					"id" : "slaveinfo::@3451288a7b55caeda638",
+					"jsonFile" : "target-slaveinfo-Debug-f144f68b326cb55dd9a6.json",
+					"name" : "slaveinfo",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "soem::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-soem-Debug-d5b6a440efd062454b30.json",
+					"name" : "soem",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/zero/test_project/SOEM-master/cmake-build-debug",
+		"source" : "/home/zero/test_project/SOEM-master"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}
