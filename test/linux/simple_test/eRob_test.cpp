@@ -242,9 +242,9 @@ int erob_test() {
     start_ecatthread_thread = TRUE;
     osal_thread_create_rt(&thread1, stack64k * 2, (void *)&ecatthread, (void *)&ctime_thread);
     // 将 thread1 绑定到 CPU 4
-    set_thread_affinity(*thread1, 4);
+    //set_thread_affinity(*thread1, 4);
     osal_thread_create(&thread2, stack64k * 2, (void *)&ecatcheck, NULL);
-    set_thread_affinity(*thread2, 5);
+    //set_thread_affinity(*thread2, 5);
     printf("___________________________________________\n");
     my_RA = 0;
     for (int cnt = 1; cnt <= ec_slavecount; cnt++) {
