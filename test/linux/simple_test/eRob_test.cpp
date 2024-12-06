@@ -207,7 +207,7 @@ int erob_test() {
         printf("___________________________________________\n");
         ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);  ///!!!!!!!  DC
     }
-    ec_configdc();   // 9%
+
     // Set the IOMap
     ec_config_map(&IOmap);
 
@@ -224,7 +224,7 @@ int erob_test() {
         return -1;
     }
     // Call ec_configdc() in EC_STATE_SAFE_OP state
-
+    ec_configdc();   // 9%
     expectedWKC = (ec_group[0].outputsWKC * 2) + ec_group[0].inputsWKC;
     printf("Calculated workcounter %d\n", expectedWKC);
     printf("___________________________________________\n");
