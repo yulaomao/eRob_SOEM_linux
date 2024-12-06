@@ -51,7 +51,7 @@ information is available in the [PDF](http://openethercatsociety.github.io/cla/c
 
 # eRob_test result:
 
-The results were obtained under an RTLinux environment, where six eRob units were driven simultaneously and ran stably for 3 hours. The image on the right shows the scheduling latency. Although scheduling latency became abnormal at the end of the program, the average scheduling latency remained very low, with normal latency around 100 microseconds during operation.
+The results were obtained under an RTLinux environment, where `6 eRobs` were driven simultaneously and ran stably for `3 hours`. The image on the right shows the scheduling latency. Although scheduling latency became abnormal at the end of the program, the average scheduling latency remained very low, with normal latency around 100 microseconds during operation.
 
 <div class="Result">
   <a>
