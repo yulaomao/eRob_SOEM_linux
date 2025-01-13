@@ -1,1 +1,0 @@
-/usr/bin/gcc  -Wall -Wextra -Werror CMakeFiles/simple_test.dir/simple_test.c.o -o simple_test   -L/home/zero/SOEM_ethercat/install/SOEM/lib  -Wl,-rpath,/home/zero/SOEM_ethercat/install/SOEM/lib: ../../../libsoem.a -lpthread -lrt 
