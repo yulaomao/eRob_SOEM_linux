@@ -22,62 +22,38 @@
    Use packet capture tools to analyze EtherCAT output and log information to identify errors.
 
 
-# Simple Open EtherCAT Master Library
-[![Build Status](https://github.com/OpenEtherCATsociety/SOEM/workflows/build/badge.svg?branch=master)](https://github.com/OpenEtherCATsociety/SOEM/actions?workflow=build)
+## Installation
 
-BUILDING
-========
+1. install eRob-SOEM-Linux
+``` bash
+git clone https://github.com/ZeroErrControl/eRob_SOEM_linux.git
+cd eRob_SOEM_linux
+mkdir build
+cd build
+cmake ..
+make
 
+```
 
-Prerequisites for all platforms
--------------------------------
+## Usage
+### Running demo:
 
- * CMake 3.9 or later
+1. CSV mode:
+```bash
+sudo ./build/demo/eRob_CSV
+```
 
+2. Launch the position subscriber (PP):
+```bash
+sudo ./build/demo/eRob_PP_subscriber
+python3 src/erob_ros/src/eCoder_fake.py
+```
 
-Windows (Visual Studio)
------------------------
-
- * Start a Visual Studio command prompt then:
-   * `mkdir build`
-   * `cd build`
-   * `cmake .. -G "NMake Makefiles"`
-   * `nmake`
-
-Linux & macOS
---------------
-
-   * `mkdir build`
-   * `cd build`
-   * `cmake ..`
-   * `make`
-
-ERIKA Enterprise RTOS
----------------------
-
- * Refer to http://www.erika-enterprise.com/wiki/index.php?title=EtherCAT_Master
-
-Documentation
--------------
-
-See https://openethercatsociety.github.io/doc/soem/
+3. Launch the position subscriber (CSP):
+```bash
+sudo ./build/demo/eRob_CSP_subscriber
+python3 src/erob_ros/src/eCoder_fake.py
+``` 
 
 
-Want to contribute to SOEM or SOES?
------------------------------------
-
-If you want to contribute to SOEM or SOES you will need to sign a Contributor
-License Agreement and send it to us either by e-mail or by physical mail. More
-information is available in the [PDF](http://openethercatsociety.github.io/cla/cla_soem_soes.pdf).
-# SOEM_linux
-
-# eRob_test result:
-
-The results were obtained under an RTLinux environment, where `6 eRobs` were driven simultaneously and ran stably for `3 hours`. The image on the right shows the scheduling latency. Although scheduling latency became abnormal at the end of the program, the average scheduling latency remained very low, with normal latency around 100 microseconds during operation.
-
-<div class="Result">
-  <a>
-    <img src="https://cdn-fusion.imgcdn.store/i/2024/293414c32d874812.png" alt="Result" style={{ width: '1000', height: 'auto' }} />
-  </a>
-</div>
 
