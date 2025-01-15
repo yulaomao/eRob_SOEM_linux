@@ -62,3 +62,12 @@ In this mode, we can control the torque of the servo motor and have added PDO ma
 sudo ./build/demo/eRob_PT
 ``` 
 If you want to consult the object dictionary, you can run the following command and then run `sudo ./build/test/linux/slaveinfo <ethercat_device> -map` to view the object dictionary.
+
+
+5. Launch the cyclic synchronous torque mode (CST):
+In this mode, we can control the torque of the servo motor and have added PDO mapping to obtain the position, speed, torque, and status word of the servo motor. 
+
+```bash
+sudo ./build/demo/eRob_CST
+``` 
+If you want to consult the object dictionary, you can run the following command and then run `sudo ./build/test/linux/slaveinfo <ethercat_device> -map` to view the object dictionary.
