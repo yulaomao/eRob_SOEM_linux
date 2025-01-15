@@ -22,4 +22,6 @@ add_executable(eRob_PP_subscriber eRob_PP_subscriber.cpp)
 target_link_libraries(eRob_PP_subscriber soem)
 install(TARGETS eRob_PP_subscriber DESTINATION bin)
 
-
+add_executable(eRob_PT eRob_PT.cpp)
+target_link_libraries(eRob_PT soem)
+install(TARGETS eRob_PT DESTINATION bin)
