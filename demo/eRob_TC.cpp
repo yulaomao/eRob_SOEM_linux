@@ -64,23 +64,46 @@ void add_timespec(struct timespec *ts, int64 addtime);
 float Cnt_to_deg = 0.000686645; // Conversion factor from counts to degrees
 int8_t SLAVE_ID; // Slave ID for EtherCAT communication
 
-// Structure for RXPDO (Control data sent to slave)
-typedef struct {
-    uint16_t controlword;     // 0x6040:0, 16 bits
-    int16_t target_torque;    // 0x6071:0, 16 bits
-    int32_t torque_slope;     // 0x6087:0, 32 bits
-    uint16_t max_torque;      // 0x6072:0, 16 bits
-    uint8_t mode_of_operation;// 0x6060:0, 8 bits
-    uint8_t padding;          // 8 bits padding
-} __attribute__((__packed__)) rxpdo_t;
+// 在文件开始处添加卡尔曼滤波器类
+class KalmanFilter {
+private:
+    float Q;      // 过程噪声协方差
+    float R;      // 测量噪声协方差
+    float P;      // 估计误差协方差
+    float K;      // 卡尔曼增益
+    float x_est;  // 当前估计值
 
-// Structure for TXPDO (Status data received from slave)
-typedef struct {
-    uint16_t statusword;      // 0x6041:0, 16 bits
-    int32_t actual_position;  // 0x6064:0, 32 bits
-    int32_t actual_velocity;  // 0x606C:0, 32 bits
-    int16_t actual_torque;    // 0x6077:0, 16 bits
-} __attribute__((__packed__)) txpdo_t;
+public:
+    KalmanFilter(float Q = 0.1, float R = 1.0) {
+        this->Q = Q;
+        this->R = R;
+        this->P = 1.0;
+        this->K = 0.0;
+        this->x_est = 0.0;
+    }
+
+    float update(float measurement) {
+        // 预测
+        P = P + Q;
+
+        // 更新
+        K = P / (P + R);
+        x_est = x_est + K * (measurement - x_est);
+        P = (1 - K) * P;
+
+        return x_est;
+    }
+
+    void reset() {
+        P = 1.0;
+        x_est = 0.0;
+    }
+
+    void setParameters(float new_Q, float new_R) {
+        Q = new_Q;
+        R = new_R;
+    }
+};
 
 //##################################################################################################
 // Function: Set the CPU affinity for a thread
@@ -108,6 +131,19 @@ int erob_test() {
     int rdl; // Variable to hold read data length
     SLAVE_ID = 1; // Set the slave ID to 1
     int i, j, oloop, iloop, chk; // Loop control variables
+    uint32_t max_velocity = 50000;
+
+    // 阻抗控制参数
+    float M = 0.5;    // 虚拟质量
+    float B = 50.0;   // 阻尼系数
+    float K = 100.0;  // 刚度
+    float dt = 0.001; // 控制周期 (1ms)
+    
+    // 阻抗控制变量
+    float current_velocity = 0.0;
+    float desired_force = 0.0;  // 期望交互力
+    float force_error = 0.0;
+    float velocity_cmd = 0.0;
 
     // 1. Call ec_config_init() to move from INIT to PRE-OP state.
     printf("__________STEP 1___________________\n");
@@ -175,33 +211,25 @@ int erob_test() {
         // 1. First, disable PDO
         retval += ec_SDOwrite(i, 0x1600, 0x00, FALSE, sizeof(zero_map), &zero_map, EC_TIMEOUTSAFE);
         
-        // 2. Configure new PDO mapping
+        // 2. Configure new PDO mapping for CSV mode
         // Add Control Word
         map_object = 0x60400010;  // 0x6040:0 Control Word, 16 bits
         retval += ec_SDOwrite(i, 0x1600, 0x01, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Target Torque
-        map_object = 0x60710010;  // 0x6071:0 Target Torque, 16 bits
+        // Add Target Velocity
+        map_object = 0x60FF0020;  // 0x60FF:0 Target Velocity, 32 bits
         retval += ec_SDOwrite(i, 0x1600, 0x02, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
-        
-        // Add Torque Slope
-        map_object = 0x60870020;  // 0x6087:0 Torque Slope, 32 bits
-        retval += ec_SDOwrite(i, 0x1600, 0x03, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
-        
-        // Add Max Torque
-        map_object = 0x60720010;  // 0x6072:0 Max Torque, 16 bits
-        retval += ec_SDOwrite(i, 0x1600, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
         // Add Modes of Operation
         map_object = 0x60600008;  // 0x6060:0 Modes of Operation, 8 bits
-        retval += ec_SDOwrite(i, 0x1600, 0x05, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
+        retval += ec_SDOwrite(i, 0x1600, 0x03, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
         // Add 8-bit padding
         map_object = 0x00000008;  // 8-bit padding
-        retval += ec_SDOwrite(i, 0x1600, 0x06, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
+        retval += ec_SDOwrite(i, 0x1600, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Change the number of PDO mappings to 6 (including padding)
-        uint8 map_count = 6;  // Mapped 6 objects
+        // Set the number of mapped objects (4 objects, including padding)
+        uint8 map_count = 4;
         retval += ec_SDOwrite(i, 0x1600, 0x00, FALSE, sizeof(map_count), &map_count, EC_TIMEOUTSAFE);
         
         // 4. Configure RXPDO allocation
@@ -414,132 +442,163 @@ int erob_test() {
     // 9. Configure servomotor and mode operation
     printf("__________STEP 9___________________\n");
 
-    if (ec_slave[0].state == EC_STATE_OPERATIONAL) {
+    if (ec_slave[0].state == EC_STATE_OPERATIONAL) { // Check if the first slave is in OP state
         printf("######################################################################################\n");
         printf("################# All slaves entered into OP state! ##################################\n");
         
-        uint16_t Control_Word = 0x0000;
-        uint8 operation_mode = 4;  // Profile Torque Mode
-        uint16_t max_torque = 200;
+        // Initialize variables for PDO mapping
+        uint16_t control_word = 0x0000;
+        int32_t target_velocity = 0;
+        uint32_t max_velocity = 50000;    // Maximum velocity limit
+        int8_t op_mode = 9;            // CSV mode
+        int8_t padding = 0;            // 8-bit padding
+
+        // Impedance control parameters
+        float M = 0.5;    // Virtual mass
+        float B = 50.0;   // Damping coefficient
+        float K = 100.0;  // Stiffness
+        float dt = 0.001; // Control cycle time (1ms)
         
-        // 声明PDO结构体变量
-        rxpdo_t rxpdo;
-        txpdo_t txpdo;
+        // Variables for impedance control
+        float current_velocity = 0.0;
+        float desired_force = 0.0;  // Desired interaction force
+        float force_error = 2.0;
+        float velocity_cmd = 0.0;
         
+        // 创建卡尔曼滤波器实例
+        KalmanFilter velocity_filter(0.1, 1.0);  // Q=0.1, R=1.0
+
         for (int i = 1; i <= ec_slavecount; i++) {
-            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE);
-            ec_SDOwrite(i, 0x6072, 0x00, FALSE, sizeof(max_torque), &max_torque, EC_TIMEOUTSAFE);
-            ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(Control_Word), &Control_Word, EC_TIMEOUTSAFE);
+            // Set operation mode to CSV
+            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(op_mode), &op_mode, EC_TIMEOUTSAFE);
+            
+            // Set maximum velocity
+            ec_SDOwrite(i, 0x6080, 0x00, FALSE, sizeof(max_velocity), &max_velocity, EC_TIMEOUTSAFE);
+            
+            // Set initial control word
+            ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(control_word), &control_word, EC_TIMEOUTSAFE);
         }
 
-        // 记录开始时间
+        // Record start time
         auto start = std::chrono::high_resolution_clock::now();
         int step = 0;
 
-        // 主循环
+        // Main control loop
         for(i = 1; i <= 3 * 60 * 60 * 1000; i++) {
             ec_send_processdata();
             wkc = ec_receive_processdata(EC_TIMEOUTRET);
 
-            if (step <= 200) {
-                // Initial state
-                rxpdo.controlword = 0x0080;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 300) {
-                // Shutdown command
-                rxpdo.controlword = 0x0006;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 400) {
-                // Switch On command
-                rxpdo.controlword = 0x0007;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 500) {
-                // Enable Operation command
-                rxpdo.controlword = 0x000F;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else {
-                // Normal operation with torque control
-                rxpdo.controlword = 0x000F;
-                rxpdo.target_torque = 100;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-
-            // Send output data to each slave
-            for (int slave = 1; slave <= ec_slavecount; slave++) {
-                memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
-            }
-
             if(wkc >= expectedWKC) {
-                if (i % 100 == 0) {  // Print every 100 cycles
-                    for(int slave = 1; slave <= ec_slavecount; slave++) {
-                        // Get input data using the structure
-                        memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
-                        
-                        // Print received data
-                        printf("Slave %d:\n", slave);
-                        printf("  Status Word: 0x%04x\n", txpdo.statusword);
-                        printf("  Position: %d\n", txpdo.actual_position);
-                        printf("  Velocity: %d\n", txpdo.actual_velocity);
-                        printf("  Torque: %d\n", txpdo.actual_torque);
-                        
-                        // Parse status word
-                        printf("  State: ");
-                        if (txpdo.statusword & 0x0001) printf("Ready to switch on ");
-                        if (txpdo.statusword & 0x0002) printf("Switched on ");
-                        if (txpdo.statusword & 0x0004) printf("Operation enabled ");
-                        if (txpdo.statusword & 0x0008) printf("Fault ");
-                        if (txpdo.statusword & 0x0010) printf("Voltage enabled ");
-                        if (txpdo.statusword & 0x0020) printf("Quick stop ");
-                        if (txpdo.statusword & 0x0040) printf("Switch on disabled ");
-                        if (txpdo.statusword & 0x0080) printf("Warning ");
-                        printf("\n");
-                    }
-                    printf("----------------------------------------\n");
+                printf("Processdata cycle %4d, WKC %d\n", i, wkc);
+                
+                // Read TxPDO data and implement impedance control
+                for(int slave = 1; slave <= ec_slavecount; slave++) {
+                    uint8_t* input = ec_slave[slave].inputs;
+                    
+                    // Read status word (16 bits)
+                    uint16_t statusword = *(uint16_t*)(input + 0);
+                    
+                    // Read actual position (32 bits)
+                    int32_t actual_position = *(int32_t*)(input + 2);
+                    
+                    // Read actual velocity (32 bits)
+                    int32_t actual_velocity = *(int32_t*)(input + 6);
+                    
+                    // Read actual torque (16 bits)
+                    int16_t actual_torque = *(int16_t*)(input + 10);
+                    
+                    // Print status information
+                    printf("Slave %d:\n", slave);
+                    printf("  Status Word: 0x%04x\n", statusword);
+                    printf("  Position: %d\n", actual_position);
+                    printf("  Velocity: %d\n", actual_velocity);
+                    printf("  Torque: %d\n", actual_torque);
+                    
+                    // Impedance control calculation
+                    force_error = desired_force - actual_torque;  // Error between desired and actual force
+                    
+                    // Calculate velocity command based on impedance model
+                    velocity_cmd = (force_error * dt*1000) / (M * dt + B)*1000;
+                    
+                    // 应用卡尔曼滤波
+                    float filtered_velocity = velocity_filter.update(velocity_cmd);
+
+                    // Limit velocity command
+                    if(filtered_velocity > 10000) filtered_velocity = 10000;
+                    if(filtered_velocity < -10000) filtered_velocity = -10000;
+                    
+                    target_velocity = (int32_t)filtered_velocity;
+                    printf("  Filtered velocity: %f\n", filtered_velocity);
                 }
-                needlf = TRUE;
+                
+                // Control logic based on the step counter
+                if (step <= 200) {
+                    // Initial state
+                    control_word = 0x0080;
+                    target_velocity = 0;
+                    max_velocity = 500;
+                    op_mode = 9;
+                    padding = 0;
+                } else if (step <= 300) {
+                    // Shutdown command
+                    control_word = 0x0006;
+                } else if (step <= 400) {
+                    // Switch On command
+                    control_word = 0x0007;
+                } else if (step <= 500) {
+                    // Enable Operation command
+                    control_word = 0x000F;
+                } else {
+                    // Normal operation
+                    control_word = 0x000F;
+            
+                    max_velocity = 500;
+                    op_mode = 9;
+                    padding = 0;
+                }
+
+                // Send output data to each slave
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    uint8_t *output = ec_slave[slave].outputs;
+                    
+                    // Copy data with correct sizes and order matching PDO mapping
+                    memcpy(output, &control_word, sizeof(uint16_t));      // 16-bit Control Word
+                    memcpy(output + 2, &target_velocity, sizeof(int32_t));    // 32-bit Target Velocity
+                    memcpy(output + 6, &op_mode, sizeof(int8_t));          // 8-bit Mode of Operation
+                    memcpy(output + 7, &padding, sizeof(int8_t));          // 8-bit padding
+                }
             }
 
             if(step < 900) {
                 step += 1;
             }
 
-            osal_usleep(1000);
+            osal_usleep(1000); // 1ms cycle time
+        }
+
+        osal_usleep(1e6);
+
+        ec_close();
+
+         printf("\nRequest init state for all slaves\n");
+         ec_slave[0].state = EC_STATE_INIT;
+         /* request INIT state for all slaves */
+         ec_writestate(0);
+
+        printf("EtherCAT master closed.\n");
+    } else {
+        printf("Not all slaves reached operational state.\n");
+
+        ec_readstate();
+        for (int i = 1; i <= ec_slavecount; i++) {
+            if (ec_slave[i].state != EC_STATE_OPERATIONAL) {
+                printf("Slave %d State=0x%2.2x StatusCode=0x%4.4x : %s\n", i, ec_slave[i].state, ec_slave[i].ALstatuscode, ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
+                printf("Requesting INIT state for slave %d\n", i);
+                ec_slave[i].state = EC_STATE_INIT;
+                printf("___________________________________________\n");
+            }
         }
     }
-
-    osal_usleep(1e6);
-
-    ec_close();
-
-     printf("\nRequest init state for all slaves\n");
-     ec_slave[0].state = EC_STATE_INIT;
-     /* request INIT state for all slaves */
-     ec_writestate(0);
-
-    printf("EtherCAT master closed.\n");
 
     return 0;
 }
