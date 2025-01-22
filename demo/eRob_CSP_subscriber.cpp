@@ -589,34 +589,34 @@ int erob_test() {
                 }
                 pthread_mutex_unlock(&target_mutex);
 
-                printf("\n当前状态:\n");
-                printf("当前位置: %d\n", txpdo.actual_position);
-                printf("目标位置: %d\n", new_target);
-                printf("更新标志: %d\n", need_update);
+                printf("\nCurrent state:\n");
+                printf("Current position: %d\n", txpdo.actual_position);
+                printf("Target position: %d\n", new_target);
+                printf("Update flag: %d\n", need_update);
                 
                 if (need_update) {
                     g_motion_planner.target_position = new_target;
-                    printf(">>> 运动规划器更新:\n");
-                    printf("  新目标位置: %d\n", new_target);
-                    printf("  规划器目标: %d\n", g_motion_planner.target_position);
-                    printf("  当前位置: %d\n", txpdo.actual_position);
-                    g_motion_planner.is_moving = true;  // 确保开始运动
+                    printf(">>> Motion planner update:\n");
+                    printf("  New target position: %d\n", new_target);
+                    printf("  Planner target: %d\n", g_motion_planner.target_position);
+                    printf("  Current position: %d\n", txpdo.actual_position);
+                    g_motion_planner.is_moving = true;  // Ensure start motion
                 }
 
                 // 进行运动规划
                 int32_t planned_pos = plan_trajectory(&g_motion_planner, txpdo.actual_position);
-                printf("规划结果: current=%d, planned=%d, target=%d, moving=%d\n",
+                printf("Planning result: current=%d, planned=%d, target=%d, moving=%d\n",
                        txpdo.actual_position, planned_pos, g_motion_planner.target_position,
                        g_motion_planner.is_moving);
                 
                 rxpdo.target_position = planned_pos;
 
                 // 每次循环都打印状态
-                printf("运动状态:\n");
-                printf("  控制字: 0x%04x\n", rxpdo.controlword);
-                printf("  状态字: 0x%04x\n", txpdo.statusword);
-                printf("  运行模式: %d\n", rxpdo.mode_of_operation);
-                printf("  位置误差: %d\n", g_motion_planner.target_position - txpdo.actual_position);
+                printf("Motion state:\n");
+                printf("  Control word: 0x%04x\n", rxpdo.controlword);
+                printf("  Status word: 0x%04x\n", txpdo.statusword);
+                printf("  Operation mode: %d\n", rxpdo.mode_of_operation);
+                printf("  Position error: %d\n", g_motion_planner.target_position - txpdo.actual_position);
                 printf("--------------------\n");
             }
             }
@@ -795,7 +795,7 @@ int test_count_sum = 100;
 int test_count = 0;
 float correct_rate = 0;
 
-// 在 MotionPlanner 结构体定义之前添加辅助函数
+// Helper function for clamping values
 template<typename T>
 T clamp(T value, T min_val, T max_val) {
     if (value < min_val) return min_val;
@@ -803,32 +803,31 @@ T clamp(T value, T min_val, T max_val) {
     return value;
 }
 
-// 平滑更新目标位置
+// Smooth target position update
 int32_t update_smooth_target(MotionPlanner* planner) {
     double position_diff = planner->target_position - planner->smooth_target;
     
-    // 根据距离动态调整平滑因子
+    // Dynamic smooth factor adjustment based on distance
     double adaptive_factor = planner->SMOOTH_FACTOR;
-
     
-    // 计算本周期的位置增量
+    // Calculate position increment for this cycle
     double position_increment = position_diff * adaptive_factor;
     
-    // 限制每个周期的位置变化量
+    // Limit position change per cycle
     double max_increment = planner->MAX_VELOCITY * planner->CYCLE_TIME;
     if (fabs(position_increment) > max_increment) {
         position_increment = copysign(max_increment, position_increment);
     }
     
-    // 更新平滑目标位置
+    // Update smooth target position
     planner->smooth_target += position_increment;
     
     return planner->smooth_target;
 }
 
-// 五次多项式轨迹规划
+// Fifth-order polynomial trajectory planning
 int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position) {
-    // 首次启动时初始化
+    // Initialize on first start
     if (!planner->is_moving) {
         planner->start_position = actual_position;
         planner->current_position = actual_position;
@@ -838,22 +837,22 @@ int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position) {
         planner->is_moving = true;
     }
     
-    // 平滑更新目标位置
+    // Update smooth target position
     int32_t current_target = update_smooth_target(planner);
     
-    // 计算到最终目标的距离
+    // Calculate distance to final target
     double final_distance = planner->target_position - planner->current_position;
     
-    // 如果非常接近最终目标位置，进入精确定位模式
+    // Enter precise positioning mode when very close to final target
     if (fabs(final_distance) < 100) {
-        // 使用比例控制进行精确定位
+        // Use proportional control for precise positioning
         double position_error = planner->target_position - planner->current_position;
-        double precise_velocity = position_error * 0.5;  // 比例因子0.5
+        double precise_velocity = position_error * 0.5;  // Proportional factor 0.5
         
-        // 限制精确定位时的速度
+        // Limit velocity during precise positioning
         precise_velocity = clamp(precise_velocity, -100.0, 100.0);
         
-        // 如果误差很小，直接到达目标位置
+        // Directly reach target if error is very small
         if (fabs(position_error) < fabs(precise_velocity * planner->CYCLE_TIME)) {
             planner->current_position = planner->target_position;
             planner->current_velocity = 0.0;
@@ -861,30 +860,30 @@ int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position) {
             return planner->target_position;
         }
         
-        // 更新位置
+        // Update position
         planner->current_position += precise_velocity * planner->CYCLE_TIME;
         planner->current_velocity = precise_velocity;
         return static_cast<int32_t>(planner->current_position);
     }
     
-    // 正常的轨迹规划
+    // Normal trajectory planning
     if (current_target != planner->current_position) {
         planner->start_position = planner->current_position;
         double distance = fabs(current_target - planner->start_position);
         
-        // 根据距离计算合适的运动时间
+        // Calculate appropriate motion time based on distance
         double min_time = 2.0 * distance / planner->MAX_VELOCITY;
         planner->total_time = min_time * 1.5;
         planner->current_time = 0.0;
         
-        // 重新计算多项式系数
+        // Recalculate polynomial coefficients
         double T = planner->total_time;
         double x0 = planner->start_position;
         double xf = current_target;
-        double v0 = planner->current_velocity;
-        double vf = 0;
-        double a0 = 0;
-        double af = 0;
+        double v0 = planner->current_velocity;  // Use current velocity as initial velocity
+        double vf = 0;  // Target velocity
+        double a0 = 0;  // Initial acceleration
+        double af = 0;  // Target acceleration
 
         planner->a0 = x0;
         planner->a1 = v0;
@@ -894,17 +893,17 @@ int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position) {
         planner->a5 = (12*xf - 12*x0 - (6*vf + 6*v0)*T - (a0 - af)*T*T)/(2*T*T*T*T*T);
     }
 
-    // 更新时间
+    // Update time
     planner->current_time += planner->CYCLE_TIME;
     double t = planner->current_time;
 
     if (t >= planner->total_time) {
-        // 继续运动而不是直接设置位置
+        // Continue motion instead of directly setting position
         planner->current_time = planner->total_time;
         t = planner->total_time;
     }
 
-    // 计算当前位置和速度
+    // Calculate current position and velocity
     planner->current_position = planner->a0 + 
                                planner->a1 * t + 
                                planner->a2 * t * t + 
@@ -918,12 +917,12 @@ int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position) {
                                4 * planner->a4 * t * t * t + 
                                5 * planner->a5 * t * t * t * t;
 
-    // 确保速度不超过限制
+    // Ensure velocity stays within limits
     planner->current_velocity = clamp(planner->current_velocity, 
                                     -planner->MAX_VELOCITY, 
                                      planner->MAX_VELOCITY);
 
-    // 调试信息
+    // Debug information
     if (rand() % 1000 == 0) {
         printf("\nTrajectory Debug:\n");
         printf("Target: %d, Current: %.2f\n", planner->target_position, planner->current_position);
@@ -983,17 +982,17 @@ void* start_server(void* arg) {
         int valread = read(new_socket, buffer, 1024);
         if (valread > 0) {
             try {
-                std::cout << "\n收到原始数据: " << buffer << std::endl;
+                std::cout << "\nReceived raw data: " << buffer << std::endl;
                 int32_t new_target = std::stoi(buffer);
                 
                 pthread_mutex_lock(&target_mutex);
                 received_target = new_target;
                 target_updated = true;
-                std::cout << "设置新目标位置: " << new_target << std::endl;
-                std::cout << "更新标志设置为: " << target_updated << std::endl;
+                std::cout << "Set new target position: " << new_target << std::endl;
+                std::cout << "Update flag set to: " << target_updated << std::endl;
                 pthread_mutex_unlock(&target_mutex);
             } catch (const std::exception& e) {
-                std::cerr << "数据转换错误: " << e.what() << std::endl;
+                std::cerr << "Data conversion error: " << e.what() << std::endl;
             }
             memset(buffer, 0, sizeof(buffer));
         } else if (valread == 0) {
