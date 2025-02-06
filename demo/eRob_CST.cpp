@@ -64,6 +64,12 @@ void add_timespec(struct timespec *ts, int64 addtime);
 float Cnt_to_deg = 0.000686645; // Conversion factor from counts to degrees
 int8_t SLAVE_ID; // Slave ID for EtherCAT communication
 
+// Add protection parameters at the top of the file after global variables
+#define MAX_SAFE_TORQUE 100     // Maximum safe torque value (adjust based on your motor)
+#define MIN_SAFE_TORQUE -100    // Minimum safe torque value
+#define TORQUE_WARNING_THRESHOLD 90  // Warning threshold at 90% of max torque
+bool emergency_stop = false;    // Emergency stop flag
+
 //##################################################################################################
 // Function: Set the CPU affinity for a thread
 void set_thread_affinity(pthread_t thread, int cpu_core) {
@@ -431,31 +437,36 @@ int erob_test() {
             if(wkc >= expectedWKC) {
                 printf("Processdata cycle %4d, WKC %d\n", i, wkc);
                 
-                // 读取TxPDO数据
+                // Read TxPDO data
                 for(int slave = 1; slave <= ec_slavecount; slave++) {
-                    // 获取输入数据指针
                     uint8_t* input = ec_slave[slave].inputs;
                     
-                    // 读取状态字（16位）
+                    // Read status word (16-bit)
                     uint16_t statusword = *(uint16_t*)(input + 0);
                     
-                    // 读取实际位置（32位）
-                    int32_t actual_position = *(int32_t*)(input + 2);
-                    
-                    // 读取实际速度（32位）
-                    int32_t actual_velocity = *(int32_t*)(input + 6);
-                    
-                    // 读取实际扭矩（16位）
+                    // Read actual torque (16-bit)
                     int16_t actual_torque = *(int16_t*)(input + 10);
                     
-                    // 打印所有信息
+                    // Current protection logic
+                    if (actual_torque > MAX_SAFE_TORQUE || actual_torque < MIN_SAFE_TORQUE) {
+                        printf("ERROR: Torque exceeded safety limits! Actual torque: %d\n", actual_torque);
+                        emergency_stop = true;
+                        // Immediately stop the motor
+                        uint16_t quick_stop_word = 0x0002;  // Quick stop command
+                        memcpy(ec_slave[slave].outputs, &quick_stop_word, sizeof(quick_stop_word));
+                        ec_send_processdata();
+                        printf("Emergency stop activated for slave %d\n", slave);
+                    } else if (abs(actual_torque) > TORQUE_WARNING_THRESHOLD) {
+                        printf("WARNING: Torque approaching safety limit! Actual torque: %d\n", actual_torque);
+                    }
+                    
+                    // Print information
                     printf("Slave %d:\n", slave);
                     printf("  Status Word: 0x%04x\n", statusword);
-                    printf("  Position: %d\n", actual_position);
-                    printf("  Velocity: %d\n", actual_velocity);
-                    printf("  Torque: %d\n", actual_torque);
+                    printf("  Torque: %d (Safety Limits: %d to %d)\n", 
+                           actual_torque, MIN_SAFE_TORQUE, MAX_SAFE_TORQUE);
                     
-                    // 解析状态字的具体状态
+                    // Parse status word states
                     printf("  State: ");
                     if (statusword & 0x0001) printf("Ready to switch on ");
                     if (statusword & 0x0002) printf("Switched on ");
@@ -472,52 +483,80 @@ int erob_test() {
                 needlf = TRUE;
             }
 
-            // Initialize target position and velocity
-            uint32_t target_position = 0; 
-            uint32_t target_velocity = 0; 
-            uint16 output_data[16] = {0};  // Increase array size to accommodate new mapping
+            uint16 output_data[6] = {0};  // Reduced size for CST mode
 
-            // Control logic based on the step counter
-            if (step <= 200) {
-                // Initial state
-                output_data[0] = 0x0080;  // Initial state command
-                output_data[1] = 0;       // Target torque set to 0
-                output_data[2] = 1000;    // Torque slope
-                output_data[3] = 0;       // High 16 bits of torque slope
-                output_data[4] = 200;     // Maximum torque set to 200
-                output_data[5] = 4;       // Profile torque mode
-            } else if (step <= 300) {
-                // Shutdown command
-                output_data[0] = 0x0006;  // Shutdown command (bit1=1, bit2=1)
-                output_data[1] = 0;       // Target torque remains 0
-                output_data[2] = 1000;    // Torque slope
-                output_data[3] = 0;       // High 16 bits of torque slope
-                output_data[4] = 200;     // Maximum torque
-                output_data[5] = 4;       // Mode
-            } else if (step <= 400) {
-                // Switch On command
-                output_data[0] = 0x0007;  // Switch On command (bit0=1, bit1=1, bit2=1)
-                output_data[1] = 0;       // Target torque remains 0
-                output_data[2] = 1000;    // Torque slope
-                output_data[3] = 0;       // High 16 bits of torque slope
-                output_data[4] = 200;     // Maximum torque
-                output_data[5] = 4;       // Mode
-            } else if (step <= 500) {
-                // Enable Operation command
-                output_data[0] = 0x000F;  // Enable Operation command (bit0=1, bit1=1, bit2=1, bit3=1)
-                output_data[1] = 0;       // Target torque remains 0
-                output_data[2] = 1000;    // Torque slope
-                output_data[3] = 0;       // High 16 bits of torque slope
-                output_data[4] = 200;     // Maximum torque
-                output_data[5] = 4;       // Mode
+            // Only execute normal control logic if emergency stop is not triggered
+            if (!emergency_stop) {
+                // Control logic based on the step counter
+                if (step <= 200) {
+                    // Initial state
+                    output_data[0] = 0x0080;  // Initial state command
+                    output_data[1] = 0;       // Target torque set to 0
+                    output_data[2] = 1000;    // Torque slope
+                    output_data[3] = 0;       // High 16 bits of torque slope
+                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
+                    output_data[5] = 4;       // CST mode
+                } else if (step <= 300) {
+                    // Shutdown command
+                    output_data[0] = 0x0006;  // Shutdown command
+                    output_data[1] = 0;       // Target torque
+                    output_data[2] = 1000;    // Torque slope
+                    output_data[3] = 0;       // High 16 bits of torque slope
+                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
+                    output_data[5] = 4;       // CST mode
+                } else if (step <= 400) {
+                    // Switch On command
+                    output_data[0] = 0x0007;  // Switch On command
+                    output_data[1] = 0;       // Target torque
+                    output_data[2] = 1000;    // Torque slope
+                    output_data[3] = 0;       // High 16 bits of torque slope
+                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
+                    output_data[5] = 4;       // CST mode
+                } else if (step <= 500) {
+                    // Enable Operation command
+                    output_data[0] = 0x000F;  // Enable Operation command
+                    output_data[1] = 0;       // Target torque
+                    output_data[2] = 1000;    // Torque slope
+                    output_data[3] = 0;       // High 16 bits of torque slope
+                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
+                    output_data[5] = 4;       // CST mode
+                } else if (step <= 600) {
+                    // Test over-limit torque value
+                    output_data[0] = 0x000F;  // Maintain enabled state
+                    output_data[1] = 120;     // Try to set torque above limit (120 > 100)
+                    output_data[2] = 1000;    // Torque slope
+                    output_data[3] = 0;       // High 16 bits of torque slope
+                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque still limited to safe value
+                    output_data[5] = 4;       // CST mode
+                    printf("Testing over-limit torque: Attempting to set torque to 120\n");
+                } else {
+                    // After enabling, set target torque
+                    output_data[0] = 0x000F;  // Maintain enabled state
+                    output_data[1] = 120;     // Target torque (will be limited by safety check)
+                    output_data[2] = 1000;    // Torque slope
+                    output_data[3] = 0;       // High 16 bits of torque slope
+                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
+                    output_data[5] = 4;       // CST mode
+                }
+
+                // Add safety check for target torque
+                if (output_data[1] > MAX_SAFE_TORQUE) {
+                    printf("WARNING: Target torque %d exceeds limit, clamping to %d\n", 
+                           output_data[1], MAX_SAFE_TORQUE);
+                    output_data[1] = MAX_SAFE_TORQUE;
+                } else if (output_data[1] < MIN_SAFE_TORQUE) {
+                    printf("WARNING: Target torque %d below limit, clamping to %d\n", 
+                           output_data[1], MIN_SAFE_TORQUE);
+                    output_data[1] = MIN_SAFE_TORQUE;
+                }
             } else {
-                // After enabling, set target torque to 100
-                output_data[0] = 0x000F;  // Maintain enabled state
-                output_data[1] = 100;     // Target torque set to 100
-                output_data[2] = 1000;    // Torque slope
-                output_data[3] = 0;       // High 16 bits of torque slope
-                output_data[4] = 200;     // Maximum torque
-                output_data[5] = 4;       // Mode
+                // Output in emergency stop state
+                output_data[0] = 0x0002;  // Quick stop command
+                output_data[1] = 0;       // Zero torque
+                output_data[2] = 1000;    // Fast torque slope for quick stop
+                output_data[3] = 0;
+                output_data[4] = MAX_SAFE_TORQUE;
+                output_data[5] = 4;
             }
 
             // Send output data to each slave
@@ -668,50 +707,40 @@ OSAL_THREAD_FUNC ecatcheck(void *ptr) {
  * the specified cycle time.
  */
 OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
-    struct timespec ts, tleft; // Variables for time management
-    int ht; // Variable for high-resolution time
-    int64 cycletime; // Variable to hold the cycle time
-    struct timeval tp; // Variable for time value
+    struct timespec ts, tleft;
+    int ht;
+    int64 cycletime;
+    struct timeval tp;
 
-    // Get the current time in monotonic clock
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    ht = (ts.tv_nsec / 1000000) + 1; /* Round to nearest ms */
-    ts.tv_nsec = ht * 1000000; // Set nanoseconds to the rounded value
-    if (ts.tv_nsec >= NSEC_PER_SEC) { // If nanoseconds exceed 1 second
-        ts.tv_sec++; // Increment seconds
-        ts.tv_nsec -= NSEC_PER_SEC; // Adjust nanoseconds
+    ht = (ts.tv_nsec / 1000000) + 1;
+    ts.tv_nsec = ht * 1000000;
+    if (ts.tv_nsec >= NSEC_PER_SEC) {
+        ts.tv_sec++;
+        ts.tv_nsec -= NSEC_PER_SEC;
     }
-    cycletime = *(int *)ptr * 1000; /* Convert cycle time from ms to ns */
+    cycletime = *(int *)ptr * 1000;
 
-    toff = 0; // Initialize time offset
-    dorun = 0; // Initialize run flag
-    ec_send_processdata(); // Send initial process data
+    toff = 0;
+    dorun = 0;
+    ec_send_processdata();
 
-    while (1) { // Infinite loop for real-time processing
-        dorun++; // Increment run counter
-        /* Calculate next cycle start */
-        add_timespec(&ts, cycletime + toff); // Add cycle time to the current time
-        /* Wait for the cycle start */
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft); // Sleep until the next cycle
+    while (1) {
+        dorun++;
+        add_timespec(&ts, cycletime + toff);
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft);
 
-        if (start_ecatthread_thread) { // Check if the EtherCAT thread should run
-            wkc = ec_receive_processdata(EC_TIMEOUTRET); // Receive process data and store the Work Counter
+        if (start_ecatthread_thread) {
+            wkc = ec_receive_processdata(EC_TIMEOUTRET);
 
-            if (ec_slave[0].hasdc) { // If the first slave supports Distributed Clock
-                /* Calculate toff to synchronize Linux time with DC time */
-                ec_sync(ec_DCtime, cycletime, &toff); // Synchronize time
+            if (ec_slave[0].hasdc) {
+                ec_sync(ec_DCtime, cycletime, &toff);
             }
 
-            ec_send_processdata(); // Send process data to the slaves
+            ec_send_processdata();
         }
     }
 }
-
-int correct_count = 0;
-int incorrect_count = 0;
-int test_count_sum = 100;
-int test_count = 0;
-float correct_rate = 0;
 
 int main(int argc, char **argv) {
     needlf = FALSE;
@@ -720,21 +749,43 @@ int main(int argc, char **argv) {
     dorun = 0;
     ctime_thread = 1000; // 1ms cycle time
 
+    // Set main thread to CPU 3
     cpu_set_t cpuset;
-    CPU_ZERO(&cpuset); // Clear the CPU set
-    CPU_SET(3, &cpuset); // Set CPU 0 (change this to a valid core number)
+    CPU_ZERO(&cpuset);
+    CPU_SET(3, &cpuset);
 
-    // Set the CPU affinity for the current process
     if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == -1) {
         perror("sched_setaffinity");
         return EXIT_FAILURE;
     }
 
-    // Your program logic here
-    printf("Running on CPU core 0\n");
+    printf("Main thread running on CPU core 3 (4th core)\n");
+
+    // Create and set real-time EtherCAT thread on CPU 2
+    start_ecatthread_thread = TRUE;
+    osal_thread_create_rt(&thread1, stack64k * 2, (void *)&ecatthread, (void *)&ctime_thread);
+    
+    // Set CPU affinity for real-time thread
+    pthread_t thread1_handle = *(pthread_t *)thread1;
+    cpu_set_t cpuset2;
+    CPU_ZERO(&cpuset2);
+    CPU_SET(2, &cpuset2);
+    if (pthread_setaffinity_np(thread1_handle, sizeof(cpu_set_t), &cpuset2) != 0) {
+        printf("Failed to set CPU affinity for real-time thread\n");
+    } else {
+        printf("Real-time thread running on CPU core 2 (3rd core)\n");
+    }
+
+    // Create and set monitoring thread on CPU 3
+    osal_thread_create(&thread2, stack64k * 2, (void *)&ecatcheck, NULL);
+    pthread_t thread2_handle = *(pthread_t *)thread2;
+    if (pthread_setaffinity_np(thread2_handle, sizeof(cpu_set_t), &cpuset) != 0) {
+        printf("Failed to set CPU affinity for monitoring thread\n");
+    } else {
+        printf("Monitoring thread running on CPU core 3 (4th core)\n");
+    }
 
     erob_test();
-
 
     printf("End program\n");
 
