@@ -529,14 +529,14 @@ int erob_test() {
             }
             else if (step <= 500) {
                 // Enable Operation command
-                rxpdo.controlword = 0x00F;
+                rxpdo.controlword = 0x000F;
                 rxpdo.target_position = 0;
                 rxpdo.mode_of_operation = 1;
                 rxpdo.padding = 0;
             }
             else {
                 // Normal operation with position control
-                update_motor_status(SLAVE_ID);  // Update motor status
+                update_motor_status(SLAVE_ID);  // 添加电机状态更新
                 
                 pthread_mutex_lock(&target_position_mutex);
                 
@@ -544,29 +544,29 @@ int erob_test() {
                     static bool new_setpoint = false;
                     static uint16_t control_toggle = 0x0000;
                     
-                    rxpdo.mode_of_operation = 1;  // PP mode
+                    rxpdo.mode_of_operation = 1;  // PP模式
                     rxpdo.padding = 0;
                     
                     if (target_position_updated) {
-                        // Received new target position
+                        // 收到新的目标位置
                         rxpdo.target_position = target_position;
                         new_setpoint = true;
-                        control_toggle ^= 0x0040;  // Toggle control bit
+                        control_toggle ^= 0x0040;  // 切换控制位
                         target_position_updated = false;
                         printf(">>> Received new target position: %d\n", target_position);
                     }
 
                     if (new_setpoint) {
-                        // Set new position trigger bit and absolute position bit
+                        // 设置新位置触发位和绝对位置位
                         rxpdo.controlword = 0x000F | 0x0010 | control_toggle;  // Enable + new setpoint + toggle bit
                         printf(">>> Triggering motion with control word: 0x%04x\n", rxpdo.controlword);
                         new_setpoint = false;
                     } else {
-                        // Maintain enabled state
+                        // 保持使能状态
                         rxpdo.controlword = 0x000F | control_toggle;
                     }
 
-                    // Add debug information
+                    // 添加调试信息
                     if (i % 1000 == 0) {
                         printf("\n--- Motion Status Update ---\n");
                         printf("Target Position: %d\n", rxpdo.target_position);
@@ -930,15 +930,13 @@ int main(int argc, char **argv) {
     return EXIT_SUCCESS;
 }
 
-// Function to update motor status information
+// 在erob_test()函数之前添加函数定义
 void update_motor_status(int slave_id) {
-    // Update status information from TXPDO
     motor_status.status_word = txpdo.statusword;
     motor_status.actual_position = txpdo.actual_position;
     motor_status.actual_velocity = txpdo.actual_velocity;
     motor_status.actual_torque = txpdo.actual_torque;
     
-    // Check status word to determine if motor is operational
-    // Bits 0-3 should be 0111 for enabled and ready state
-    motor_status.is_operational = (txpdo.statusword & 0x0F) == 0x07;
+    // 检查状态字以确定是否可操作
+    motor_status.is_operational = (txpdo.statusword & 0x0F) == 0x07;  // 检查是否使能并准备好
 }

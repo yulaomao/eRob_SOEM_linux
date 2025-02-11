@@ -15,6 +15,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include <sys/time.h>
 #include <pthread.h>
@@ -47,7 +48,7 @@ int64 toff, gl_delta; // Time offset and global delta for synchronization
 
 // Function prototypes for EtherCAT thread functions
 OSAL_THREAD_FUNC ecatcheck(void *ptr); // Function to check the state of EtherCAT slaves
-OSAL_THREAD_FUNC ecatthread(void *ptr); // Real-time EtherCAT thread function
+OSAL_THREAD_FUNC_RT ecatthread(void *ptr); // Real-time EtherCAT thread function
 
 // Thread handles for the EtherCAT threads
 OSAL_THREAD_HANDLE thread1; // Handle for the EtherCAT check thread
@@ -62,10 +63,10 @@ void add_timespec(struct timespec *ts, int64 addtime);
 #define stack64k (64 * 1024) // Stack size for threads
 #define NSEC_PER_SEC 1000000000   // Number of nanoseconds in one second
 #define EC_TIMEOUTMON 5000        // Timeout for monitoring in microseconds
-#define MAX_VELOCITY 30000        // 降低最大速度 (从200000降到30000)
-#define MAX_ACCELERATION 50000    // 降低最大加速度 (从500000降到50000)
+#define MAX_VELOCITY 30000        // Reduced maximum velocity (from 200000 to 30000)
+#define MAX_ACCELERATION 50000    // Reduced maximum acceleration (from 500000 to 50000)
 
-// Conversion units from the servomotor
+// Conversion units for the servomotor
 float Cnt_to_deg = 0.000686645; // Conversion factor from counts to degrees
 int8_t SLAVE_ID; // Slave ID for EtherCAT communication
 
@@ -74,7 +75,7 @@ typedef struct {
     uint16_t controlword;      // 0x6040:0, 16 bits
     int32_t target_position;   // 0x607A:0, 32 bits
     uint8_t mode_of_operation; // 0x6060:0, 8 bits
-    uint8_t padding;          // 8 bits padding for alignment
+    uint8_t padding;           // 8 bits padding for alignment
 } __attribute__((__packed__)) rxpdo_t;
 
 // Structure for TXPDO (Status data received from slave)
@@ -92,9 +93,9 @@ pthread_cond_t target_position_cond = PTHREAD_COND_INITIALIZER;
 bool target_updated = false;
 int32_t received_target = 0;
 
-// 在文件开头的全局变量声明部分添加
-rxpdo_t rxpdo;  // 全局变量，用于发送到从站
-txpdo_t txpdo;  // 全局变量，用于从从站接收
+// Add in the global variable declaration section at the beginning of the file
+rxpdo_t rxpdo;  // Global variable, used for sending data to slaves
+txpdo_t txpdo;  // Global variable, used for receiving data from slaves
 
 // 在全局变量区域添加
 struct MotorStatus {
@@ -105,48 +106,48 @@ struct MotorStatus {
     int16_t actual_torque;
 } motor_status;
 
-// 在文件开头的函数原型声明部分添加（和其他函数原型放在一起）
-void update_motor_status(int slave_id);  // 添加函数声明
+
+void update_motor_status(int slave_id);  // Add function declaration
 
 // 在文件开头，其他宏定义之后添加
-#undef MAX_VELOCITY  // 确保没有命名冲突
+#undef MAX_VELOCITY  // Ensure there are no naming conflicts
 #undef MAX_ACCELERATION
 
 // 在全局变量声明区域添加
 struct MotionPlanner {
-    int32_t start_position;    // 起始位置
-    int32_t target_position;   // 最终目标位置
-    int32_t smooth_target;     // 平滑过渡的当前目标位置
-    int32_t current_position;  // 当前规划位置
-    double current_velocity;   // 当前速度
-    double start_time;         // 开始时间
-    double total_time;         // 总时间
-    double current_time;       // 当前时间
-    bool is_moving;           // 运动状态
+    int32_t start_position;    // Start position
+    int32_t target_position;   // Final target position
+    int32_t smooth_target;     // Smoothed target position for transition
+    int32_t current_position;  // Current planned position
+    double current_velocity;   // Current velocity
+    double start_time;         // Start time
+    double total_time;         // Total time
+    double current_time;       // Current time
+    bool is_moving;            // Movement state
     
-    // 运动参数
-    static constexpr double MAX_VELOCITY = 50000.0;     // 最大速度限制
-    static constexpr double CYCLE_TIME = 0.0005;         // 周期时间 1ms
-    static constexpr double SMOOTH_FACTOR = 0.002;      // 目标位置平滑因子
+    // Motion parameters
+    static constexpr double MAX_VELOCITY = 50000.0;     // Maximum velocity limit
+    static constexpr double CYCLE_TIME = 0.0005;          // Cycle time (1ms)
+    static constexpr double SMOOTH_FACTOR = 0.002;        // Smoothing factor for target position
 
-    // 五次多项式系数
+    // Quintic polynomial coefficients
     double a0, a1, a2, a3, a4, a5;
 
     MotionPlanner() : start_position(0), target_position(0), smooth_target(0),
-                     current_position(0), current_velocity(0.0),
-                     start_time(0.0), total_time(0.0), current_time(0.0),
-                     is_moving(false) {}
+                      current_position(0), current_velocity(0.0),
+                      start_time(0.0), total_time(0.0), current_time(0.0),
+                      is_moving(false) {}
 };
 
-// 定义静态成员变量
+// Define static member variables
 constexpr double MotionPlanner::MAX_VELOCITY;
 constexpr double MotionPlanner::CYCLE_TIME;
 constexpr double MotionPlanner::SMOOTH_FACTOR;
 
-// 全局变量
+// Global variable
 MotionPlanner g_motion_planner;
 
-// 函数声明
+// Function declaration
 int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position);
 
 //##################################################################################################
@@ -473,159 +474,19 @@ int erob_test() {
     if (ec_slave[0].state == EC_STATE_OPERATIONAL) {
         printf("Operational state reached for all slaves.\n");
         
-        uint8 operation_mode = 8;  // PP Mode = 1
-        
-        // 初始化PDO数据
-        rxpdo_t rxpdo;
-        txpdo_t txpdo;
-        
-        uint16_t  Control_Word;
-        Control_Word = 128;
-        
-
-        uint32_t  Profile_velocity;
-        Profile_velocity = 50000;
-
-        uint32_t  Profile_acceleration;
-        Profile_acceleration = 150000;
-
-        uint32_t  Profile_deceleration;
-        Profile_deceleration = 150000;
-        
+    
+        uint8 operation_mode = 8;
+        uint16_t Control_Word = 128;
 
 
         for (int i = 1; i <= ec_slavecount; i++) {
             ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(Control_Word), &Control_Word, EC_TIMEOUTSAFE);
             ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE);
-            ec_SDOwrite(i, 0x6081, 0x00, FALSE, sizeof(Profile_velocity), &Profile_velocity, EC_TIMEOUTSAFE);
-            ec_SDOwrite(i, 0x6083, 0x00, FALSE, sizeof(Profile_acceleration), &Profile_acceleration, EC_TIMEOUTSAFE);
-            ec_SDOwrite(i, 0x6084, 0x00, FALSE, sizeof(Profile_deceleration), &Profile_deceleration, EC_TIMEOUTSAFE);
-
         }
-        // 记录开始时间
-        auto start = std::chrono::high_resolution_clock::now();
-        int step = 0;
 
-        // 主循环
-        for(i = 1; i <= 3 * 60 * 60 * 1000; i++) {
-            ec_send_processdata();
-            wkc = ec_receive_processdata(EC_TIMEOUTRET);
-
-            
-
-            // Send output data to each slave
-            for (int slave = 1; slave <= ec_slavecount; slave++) {
-                memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
-            }
-
-            if(wkc >= expectedWKC) {
-                if (i % 100 == 0) {  // Print every 100 cycles
-                    for(int slave = 1; slave <= ec_slavecount; slave++) {
-                        // Get input data using the structure
-                        memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
-                        
-                        // Print received data
-                        printf("Slave %d:\n", slave);
-                        printf("  Status Word: 0x%04x\n", txpdo.statusword);
-                        printf("  Position: %d\n", txpdo.actual_position);
-                        printf("  Velocity: %d\n", txpdo.actual_velocity);
-                        printf("  Torque: %d\n", txpdo.actual_torque);
-                        
-                        // Parse status word
-                        printf("  State: ");
-                        if (txpdo.statusword & 0x0001) printf("Ready to switch on ");
-                        if (txpdo.statusword & 0x0002) printf("Switched on ");
-                        if (txpdo.statusword & 0x0004) printf("Operation enabled ");
-                        if (txpdo.statusword & 0x0008) printf("Fault ");
-                        if (txpdo.statusword & 0x0010) printf("Voltage enabled ");
-                        if (txpdo.statusword & 0x0020) printf("Quick stop ");
-                        if (txpdo.statusword & 0x0040) printf("Switch on disabled ");
-                        if (txpdo.statusword & 0x0080) printf("Warning ");
-                        printf("\n");
-                    }
-                    printf("----------------------------------------\n");
-                    
-                }
-                needlf = TRUE;
-
-           if (step <= 200) {
-                // Initial state
-                rxpdo.controlword = 0x0080;
-                rxpdo.target_position = 0;
-                rxpdo.mode_of_operation = 8;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 300) {
-                // Shutdown command
-                rxpdo.controlword = 0x0006;
-                rxpdo.target_position = txpdo.actual_position;
-                rxpdo.mode_of_operation = 8;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 400) {
-                // Switch On command
-                rxpdo.controlword = 0x0007;
-                rxpdo.target_position = txpdo.actual_position;
-                rxpdo.mode_of_operation = 8;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 500) {
-                // Enable Operation command
-                rxpdo.controlword = 0x00F;
-                rxpdo.target_position = txpdo.actual_position;
-                rxpdo.mode_of_operation = 8;
-                rxpdo.padding = 0;
-            }
-            else {
-                // Normal operation with position control
-                update_motor_status(SLAVE_ID);  // Update motor status
-                
-                // 只在更新目标位置时使用互斥锁
-                pthread_mutex_lock(&target_mutex);
-                bool need_update = target_updated;
-                int32_t new_target = received_target;
-                if (need_update) {
-                    target_updated = false;
-                }
-                pthread_mutex_unlock(&target_mutex);
-
-                printf("\nCurrent state:\n");
-                printf("Current position: %d\n", txpdo.actual_position);
-                printf("Target position: %d\n", new_target);
-                printf("Update flag: %d\n", need_update);
-                
-                if (need_update) {
-                    g_motion_planner.target_position = new_target;
-                    printf(">>> Motion planner update:\n");
-                    printf("  New target position: %d\n", new_target);
-                    printf("  Planner target: %d\n", g_motion_planner.target_position);
-                    printf("  Current position: %d\n", txpdo.actual_position);
-                    g_motion_planner.is_moving = true;  // Ensure start motion
-                }
-
-                // 进行运动规划
-                int32_t planned_pos = plan_trajectory(&g_motion_planner, txpdo.actual_position);
-                printf("Planning result: current=%d, planned=%d, target=%d, moving=%d\n",
-                       txpdo.actual_position, planned_pos, g_motion_planner.target_position,
-                       g_motion_planner.is_moving);
-                
-                rxpdo.target_position = planned_pos;
-
-                // 每次循环都打印状态
-                printf("Motion state:\n");
-                printf("  Control word: 0x%04x\n", rxpdo.controlword);
-                printf("  Status word: 0x%04x\n", txpdo.statusword);
-                printf("  Operation mode: %d\n", rxpdo.mode_of_operation);
-                printf("  Position error: %d\n", g_motion_planner.target_position - txpdo.actual_position);
-                printf("--------------------\n");
-            }
-            }
-
-            if(step < 900) {
-                step += 1;
-            }
-
-            osal_usleep(500);
+  // The main loop only needs to keep the program running
+        while(1) {
+            osal_usleep(100000); // Sleep for 100ms to reduce CPU usage
         }
     }
 
@@ -690,55 +551,76 @@ void add_timespec(struct timespec *ts, int64 addtime) {
 OSAL_THREAD_FUNC ecatcheck(void *ptr) {
     int slave; // Variable to hold the current slave index
     (void)ptr; // Not used
+    int consecutive_errors = 0;
+    const int MAX_CONSECUTIVE_ERRORS = 5;
 
-    while (1) { // Infinite loop for monitoring
+    while (1) {
         if (inOP && ((wkc < expectedWKC) || ec_group[currentgroup].docheckstate)) {
             if (needlf) {
-                needlf = FALSE; // Reset line feed flag
-                printf("\n"); // Print a new line
+                needlf = FALSE;
+                printf("\n");
             }
-            ec_group[currentgroup].docheckstate = FALSE; // Reset check state
-            ec_readstate(); // Read the state of all slaves
-            for (slave = 1; slave <= ec_slavecount; slave++) { // Loop through each slave
+            
+            // Increase the consecutive error count
+            if (wkc < expectedWKC) {
+                consecutive_errors++;
+                printf("WARNING: Working counter error (%d/%d), consecutive errors: %d\n", 
+                       wkc, expectedWKC, consecutive_errors);
+            } else {
+                consecutive_errors = 0;
+            }
+
+            // If the consecutive errors exceed the threshold, attempt reinitialization
+            if (consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
+                printf("ERROR: Too many consecutive errors, attempting recovery...\n");
+                ec_group[currentgroup].docheckstate = TRUE;
+                // Reset the error count
+                consecutive_errors = 0;
+            }
+
+            ec_group[currentgroup].docheckstate = FALSE;
+            ec_readstate();
+            for (slave = 1; slave <= ec_slavecount; slave++) {
                 if ((ec_slave[slave].group == currentgroup) && (ec_slave[slave].state != EC_STATE_OPERATIONAL)) {
-                    ec_group[currentgroup].docheckstate = TRUE; // Set check state if slave is not operational
+                    ec_group[currentgroup].docheckstate = TRUE;
                     if (ec_slave[slave].state == (EC_STATE_SAFE_OP + EC_STATE_ERROR)) {
                         printf("ERROR: Slave %d is in SAFE_OP + ERROR, attempting ack.\n", slave);
-                        ec_slave[slave].state = (EC_STATE_SAFE_OP + EC_STATE_ACK); // Acknowledge error state
-                        ec_writestate(slave); // Write the state change to the slave
+                        ec_slave[slave].state = (EC_STATE_SAFE_OP + EC_STATE_ACK);
+                        ec_writestate(slave);
                     } else if (ec_slave[slave].state == EC_STATE_SAFE_OP) {
                         printf("WARNING: Slave %d is in SAFE_OP, changing to OPERATIONAL.\n", slave);
-                        ec_slave[slave].state = EC_STATE_OPERATIONAL; // Change state to operational
-                        ec_writestate(slave); // Write the state change to the slave
+                        ec_slave[slave].state = EC_STATE_OPERATIONAL;
+                        ec_writestate(slave);
                     } else if (ec_slave[slave].state > EC_STATE_NONE) {
-                        if (ec_reconfig_slave(slave, EC_TIMEOUTMON)) { // Reconfigure the slave if needed
-                            ec_slave[slave].islost = FALSE; // Mark slave as found
+                        if (ec_reconfig_slave(slave, EC_TIMEOUTMON)) {
+                            ec_slave[slave].islost = FALSE;
                             printf("MESSAGE: Slave %d reconfigured\n", slave);
                         }
                     } else if (!ec_slave[slave].islost) {
-                        ec_statecheck(slave, EC_STATE_OPERATIONAL,  EC_TIMEOUTRET); // Check the state of the slave
-                        if (ec_slave[slave].state == EC_STATE_NONE) {
-                            ec_slave[slave].islost = TRUE; // Mark slave as lost
+                        ec_statecheck(slave, EC_STATE_OPERATIONAL, EC_TIMEOUTRET);
+                        if (!ec_slave[slave].state) {
+                            ec_slave[slave].islost = TRUE;
                             printf("ERROR: Slave %d lost\n", slave);
                         }
                     }
                 }
-                if (ec_slave[slave].islost) { // If the slave is marked as lost
-                    if (ec_slave[slave].state == EC_STATE_NONE) {
-                        if (ec_recover_slave(slave, EC_TIMEOUTMON)) { // Attempt to recover the lost slave
-                            ec_slave[slave].islost = FALSE; // Mark slave as found
+                if (ec_slave[slave].islost) {
+                    if (!ec_slave[slave].state) {
+                        if (ec_recover_slave(slave, EC_TIMEOUTMON)) {
+                            ec_slave[slave].islost = FALSE;
                             printf("MESSAGE: Slave %d recovered\n", slave);
                         }
                     } else {
-                        ec_slave[slave].islost = FALSE; // Mark slave as found
+                        ec_slave[slave].islost = FALSE;
                         printf("MESSAGE: Slave %d found\n", slave);
                     }
                 }
             }
             if (!ec_group[currentgroup].docheckstate) {
-                printf("OK: All slaves resumed OPERATIONAL.\n"); // Confirm all slaves are operational
+                printf("OK: All slaves resumed OPERATIONAL.\n");
             }
         }
+        osal_usleep(10000); 
     }
 }
 
@@ -750,41 +632,156 @@ OSAL_THREAD_FUNC ecatcheck(void *ptr) {
  * the specified cycle time.
  */
 OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
-    struct timespec ts, tleft; // Variables for time management
-    int ht; // Variable for high-resolution time
-    int64 cycletime; // Variable to hold the cycle time
-    struct timeval tp; // Variable for time value
+    struct timespec ts, tleft;
+    int ht;
+    int64 cycletime;
+    int missed_cycles = 0;
+    const int MAX_MISSED_CYCLES = 10;
+    struct timespec cycle_start, cycle_end;
+    long cycle_time_ns;
 
-    // Get the current time in monotonic clock
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    ht = (ts.tv_nsec / 1000000) + 1; /* Round to nearest ms */
-    ts.tv_nsec = ht * 1000000; // Set nanoseconds to the rounded value
-    if (ts.tv_nsec >= NSEC_PER_SEC) { // If nanoseconds exceed 1 second
-        ts.tv_sec++; // Increment seconds
-        ts.tv_nsec -= NSEC_PER_SEC; // Adjust nanoseconds
+    ht = (ts.tv_nsec / 1000000) + 1;
+    ts.tv_nsec = ht * 1000000;
+    if (ts.tv_nsec >= NSEC_PER_SEC) {
+        ts.tv_sec++;
+        ts.tv_nsec -= NSEC_PER_SEC;
     }
-    cycletime = *(int *)ptr * 1000; /* Convert cycle time from ms to ns */
+    cycletime = *(int *)ptr * 1000;
 
-    toff = 0; // Initialize time offset
-    dorun = 0; // Initialize run flag
-    ec_send_processdata(); // Send initial process data
+    toff = 0;
+    dorun = 0;
+    
+    // Initialize PDO data
+    rxpdo_t rxpdo;
+    txpdo_t txpdo;
+    
+    rxpdo.controlword = 0x0080;
+    rxpdo.target_position = 0;
+    rxpdo.mode_of_operation = 8;
+    rxpdo.padding = 0;
+    
+    // Send initial process data
+    for (int slave = 1; slave <= ec_slavecount; slave++) {
+        memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+    }
+    ec_send_processdata();
 
-    while (1) { // Infinite loop for real-time processing
-        dorun++; // Increment run counter
-        /* Calculate next cycle start */
-        add_timespec(&ts, cycletime + toff); // Add cycle time to the current time
-        /* Wait for the cycle start */
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft); // Sleep until the next cycle
+    int step = 0;
+    bool need_update = false;
+    int32_t new_target = 0;
 
-        if (start_ecatthread_thread) { // Check if the EtherCAT thread should run
-            wkc = ec_receive_processdata(EC_TIMEOUTRET); // Receive process data and store the Work Counter
+    while (1) {
+        clock_gettime(CLOCK_MONOTONIC, &cycle_start);
+        
+        add_timespec(&ts, cycletime + toff);
+        if (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft) != 0) {
+            // If sleep is interrupted, record the error
+            missed_cycles++;
+            printf("WARNING: Clock sleep interrupted, missed cycles: %d\n", missed_cycles);
+            if (missed_cycles >= MAX_MISSED_CYCLES) {
+                printf("ERROR: Too many missed cycles, attempting recovery...\n");
+                // Reset the counter
+                missed_cycles = 0;
+                // Resynchronize the clock
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                ts.tv_nsec = ((ts.tv_nsec / 1000000) + 1) * 1000000;
+                if (ts.tv_nsec >= NSEC_PER_SEC) {
+                    ts.tv_sec++;
+                    ts.tv_nsec -= NSEC_PER_SEC;
+                }
+            }
+        } else {
+            missed_cycles = 0;
+        }
+        
+        dorun++;
 
-            if (ec_slave[0].hasdc) { // If the first slave supports Distributed Clock
-                /* Calculate toff to synchronize Linux time with DC time */
-                ec_sync(ec_DCtime, cycletime, &toff); // Synchronize time
+        if (start_ecatthread_thread) {
+            // Receive process data
+            wkc = ec_receive_processdata(EC_TIMEOUTRET);
+
+            if (wkc >= expectedWKC) {
+                // Retrieve the current motor status
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
+                }
+
+                // Check if there is a new target position
+                pthread_mutex_lock(&target_mutex);
+                need_update = target_updated;
+                if (need_update) {
+                    new_target = received_target;
+                    target_updated = false;
+                }
+                pthread_mutex_unlock(&target_mutex);
+
+                // State machine control
+                if (step <= 400) {
+                    rxpdo.controlword = 0x0080;
+                    rxpdo.target_position = 0;
+                } else if (step <= 600) {
+                    rxpdo.controlword = 0x0006;
+                    rxpdo.target_position = txpdo.actual_position;
+                } else if (step <= 800) {
+                    rxpdo.controlword = 0x0007;
+                    rxpdo.target_position = txpdo.actual_position;
+                } else if (step <= 1000) {
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_position = txpdo.actual_position;
+                } else {
+                    // Normal operational mode
+                    if (need_update) {
+                        g_motion_planner.target_position = new_target;
+                        g_motion_planner.is_moving = true;
+                    }
+
+                    // Execute trajectory planning
+                    int32_t planned_pos = plan_trajectory(&g_motion_planner, txpdo.actual_position);
+                    
+                    // Update output PDO
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_position = planned_pos;
+                    rxpdo.mode_of_operation = 8;
+                }
+
+                // Send PDO data to the slaves
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+                }
+
+                // Print status information every 100 cycles
+                if (dorun % 100 == 0) {
+                    printf("Status: pos=%d, target=%d, vel=%d, torque=%d\n",
+                           txpdo.actual_position, rxpdo.target_position,
+                           txpdo.actual_velocity, txpdo.actual_torque);
+                }
+
+                if (step < 1200) {
+                    step++;
+                }
+            } else {
+                printf("WARNING: Working counter error (wkc: %d, expected: %d)\n", 
+                       wkc, expectedWKC);
             }
 
-            ec_send_processdata(); // Send process data to the slaves
+            // Clock synchronization
+            if (ec_slave[0].hasdc) {
+                ec_sync(ec_DCtime, cycletime, &toff);
+            }
+
+            // Send process data
+            ec_send_processdata();
+        }
+
+        // Monitor cycle time
+        clock_gettime(CLOCK_MONOTONIC, &cycle_end);
+        cycle_time_ns = (cycle_end.tv_sec - cycle_start.tv_sec) * NSEC_PER_SEC +
+                       (cycle_end.tv_nsec - cycle_start.tv_nsec);
+        
+        if (cycle_time_ns > cycletime * 1.5) {
+            printf("WARNING: Cycle time exceeded: %ld ns (expected: %ld ns)\n", 
+                   cycle_time_ns, cycletime);
         }
     }
 }
@@ -803,21 +800,12 @@ T clamp(T value, T min_val, T max_val) {
     return value;
 }
 
-// Smooth target position update
+// Smooth target position update with reduced computation
 int32_t update_smooth_target(MotionPlanner* planner) {
-    double position_diff = planner->target_position - planner->smooth_target;
+    int32_t position_diff = planner->target_position - planner->smooth_target;
     
-    // Dynamic smooth factor adjustment based on distance
-    double adaptive_factor = planner->SMOOTH_FACTOR;
-    
-    // Calculate position increment for this cycle
-    double position_increment = position_diff * adaptive_factor;
-    
-    // Limit position change per cycle
-    double max_increment = planner->MAX_VELOCITY * planner->CYCLE_TIME;
-    if (fabs(position_increment) > max_increment) {
-        position_increment = copysign(max_increment, position_increment);
-    }
+    // Simple linear interpolation
+    int32_t position_increment = position_diff * planner->SMOOTH_FACTOR;
     
     // Update smooth target position
     planner->smooth_target += position_increment;
@@ -825,7 +813,7 @@ int32_t update_smooth_target(MotionPlanner* planner) {
     return planner->smooth_target;
 }
 
-// Fifth-order polynomial trajectory planning
+// Optimized trajectory planning with reduced computational load
 int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position) {
     // Initialize on first start
     if (!planner->is_moving) {
@@ -833,103 +821,50 @@ int32_t plan_trajectory(MotionPlanner* planner, int32_t actual_position) {
         planner->current_position = actual_position;
         planner->smooth_target = actual_position;
         planner->current_velocity = 0.0;
-        planner->current_time = 0.0;
         planner->is_moving = true;
     }
     
-    // Update smooth target position
-    int32_t current_target = update_smooth_target(planner);
+    int32_t target = planner->target_position;
+    double pos_error = target - planner->current_position;
     
-    // Calculate distance to final target
-    double final_distance = planner->target_position - planner->current_position;
-    
-    // Enter precise positioning mode when very close to final target
-    if (fabs(final_distance) < 100) {
-        // Use proportional control for precise positioning
-        double position_error = planner->target_position - planner->current_position;
-        double precise_velocity = position_error * 0.5;  // Proportional factor 0.5
-        
-        // Limit velocity during precise positioning
-        precise_velocity = clamp(precise_velocity, -100.0, 100.0);
-        
-        // Directly reach target if error is very small
-        if (fabs(position_error) < fabs(precise_velocity * planner->CYCLE_TIME)) {
-            planner->current_position = planner->target_position;
-            planner->current_velocity = 0.0;
-            planner->is_moving = false;
-            return planner->target_position;
-        }
-        
-        // Update position
-        planner->current_position += precise_velocity * planner->CYCLE_TIME;
-        planner->current_velocity = precise_velocity;
-        return static_cast<int32_t>(planner->current_position);
+    // If very close to target, use simple proportional control
+    if (fabs(pos_error) < 1.0) {
+        planner->current_position = target;
+        planner->current_velocity = 0.0;
+        planner->is_moving = false;
+        return target;
     }
     
-    // Normal trajectory planning
-    if (current_target != planner->current_position) {
-        planner->start_position = planner->current_position;
-        double distance = fabs(current_target - planner->start_position);
-        
-        // Calculate appropriate motion time based on distance
-        double min_time = 2.0 * distance / planner->MAX_VELOCITY;
-        planner->total_time = min_time * 1.5;
-        planner->current_time = 0.0;
-        
-        // Recalculate polynomial coefficients
-        double T = planner->total_time;
-        double x0 = planner->start_position;
-        double xf = current_target;
-        double v0 = planner->current_velocity;  // Use current velocity as initial velocity
-        double vf = 0;  // Target velocity
-        double a0 = 0;  // Initial acceleration
-        double af = 0;  // Target acceleration
-
-        planner->a0 = x0;
-        planner->a1 = v0;
-        planner->a2 = a0/2.0;
-        planner->a3 = (20*xf - 20*x0 - (8*vf + 12*v0)*T - (3*a0 - af)*T*T)/(2*T*T*T);
-        planner->a4 = (30*x0 - 30*xf + (14*vf + 16*v0)*T + (3*a0 - 2*af)*T*T)/(2*T*T*T*T);
-        planner->a5 = (12*xf - 12*x0 - (6*vf + 6*v0)*T - (a0 - af)*T*T)/(2*T*T*T*T*T);
+    // --- Trajectory planning modification ---
+    // To make braking more gradual, use a distance-based speed calculation for deceleration control.
+    // The formula used is: v_max = sqrt(2 * BRAKE_DECEL * d)
+    // The smaller the BRAKE_DECEL, the lower the allowed speed, resulting in a slower braking effect.
+    const double BRAKE_DECEL = 5000.0;  // Deceleration rate for braking (adjustable), the smaller the value, the slower the braking
+    double allowed_speed = sqrt(2.0 * BRAKE_DECEL * fabs(pos_error));
+    
+    // Target velocity cannot exceed maximum velocity or allowed braking speed
+    double desired_vel = fmin(planner->MAX_VELOCITY, allowed_speed);
+    desired_vel = copysign(desired_vel, pos_error);  // Ensure direction is correct
+    
+    // Limit acceleration rate to prevent rapid velocity changes
+    double vel_error = desired_vel - planner->current_velocity;
+    double max_vel_change = planner->MAX_VELOCITY * planner->CYCLE_TIME;  // Maintain original acceleration limit
+    if (fabs(vel_error) > max_vel_change) {
+        planner->current_velocity += copysign(max_vel_change, vel_error);
+    } else {
+        planner->current_velocity = desired_vel;
     }
-
-    // Update time
-    planner->current_time += planner->CYCLE_TIME;
-    double t = planner->current_time;
-
-    if (t >= planner->total_time) {
-        // Continue motion instead of directly setting position
-        planner->current_time = planner->total_time;
-        t = planner->total_time;
+    
+    // Update position based on current velocity
+    planner->current_position += planner->current_velocity * planner->CYCLE_TIME;
+    // --- end modification ---
+    
+    // Debug info (reduced frequency)
+    if ((dorun % 1000) == 0) {
+        printf("Planned Trajectory: Pos: %.1f, Target: %d, Vel: %.1f\n",
+               planner->current_position, target, planner->current_velocity);
     }
-
-    // Calculate current position and velocity
-    planner->current_position = planner->a0 + 
-                               planner->a1 * t + 
-                               planner->a2 * t * t + 
-                               planner->a3 * t * t * t + 
-                               planner->a4 * t * t * t * t + 
-                               planner->a5 * t * t * t * t * t;
-
-    planner->current_velocity = planner->a1 + 
-                               2 * planner->a2 * t + 
-                               3 * planner->a3 * t * t + 
-                               4 * planner->a4 * t * t * t + 
-                               5 * planner->a5 * t * t * t * t;
-
-    // Ensure velocity stays within limits
-    planner->current_velocity = clamp(planner->current_velocity, 
-                                    -planner->MAX_VELOCITY, 
-                                     planner->MAX_VELOCITY);
-
-    // Debug information
-    if (rand() % 1000 == 0) {
-        printf("\nTrajectory Debug:\n");
-        printf("Target: %d, Current: %.2f\n", planner->target_position, planner->current_position);
-        printf("Final Distance: %.2f\n", final_distance);
-        printf("Velocity: %.2f\n", planner->current_velocity);
-    }
-
+    
     return static_cast<int32_t>(planner->current_position);
 }
 
@@ -1028,7 +963,19 @@ int main(int argc, char **argv) {
     inOP = FALSE;
     start_ecatthread_thread = FALSE;
     dorun = 0;
-    ctime_thread = 1000; // 1ms cycle time
+    ctime_thread = 500; // 1ms cycle time
+
+    // Set a higher real-time priority
+    struct sched_param param;
+    param.sched_priority = 99; // Maximum real-time priority
+    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
+        perror("sched_setscheduler failed");
+    }
+
+    // Lock memory to prevent paging
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
+        perror("mlockall failed");
+    }
 
     // Set CPU affinity
     cpu_set_t cpuset;
@@ -1040,13 +987,23 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // Start the server thread
+    // Start the server thread with lower priority
     pthread_t server_thread;
-    int port = 8080;  // You can change this port number
-    if (pthread_create(&server_thread, NULL, start_server, &port) != 0) {
+    pthread_attr_t attr;
+    struct sched_param server_param;
+    
+    pthread_attr_init(&attr);
+    pthread_attr_setschedpolicy(&attr, SCHED_OTHER);
+    server_param.sched_priority = 0;
+    pthread_attr_setschedparam(&attr, &server_param);
+    
+    int port = 8080;
+    if (pthread_create(&server_thread, &attr, start_server, &port) != 0) {
         std::cerr << "Failed to create server thread" << std::endl;
         return EXIT_FAILURE;
     }
+    
+    pthread_attr_destroy(&attr);
 
     printf("Running on CPU core 3\n");
     erob_test();
@@ -1054,4 +1011,3 @@ int main(int argc, char **argv) {
 
     return EXIT_SUCCESS;
 }
-

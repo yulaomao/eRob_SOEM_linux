@@ -15,6 +15,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include <sys/time.h>
 #include <pthread.h>
@@ -27,7 +28,6 @@
 #include <cstdint>
 
 #include <sched.h>
-
 
 // Global variables for EtherCAT communication
 char IOmap[4096]; // I/O mapping for EtherCAT
@@ -44,7 +44,7 @@ int64 toff, gl_delta; // Time offset and global delta for synchronization
 
 // Function prototypes for EtherCAT thread functions
 OSAL_THREAD_FUNC ecatcheck(void *ptr); // Function to check the state of EtherCAT slaves
-OSAL_THREAD_FUNC ecatthread(void *ptr); // Real-time EtherCAT thread function
+OSAL_THREAD_FUNC_RT ecatthread(void *ptr); // Real-time EtherCAT thread function
 
 // Thread handles for the EtherCAT threads
 OSAL_THREAD_HANDLE thread1; // Handle for the EtherCAT check thread
@@ -59,16 +59,59 @@ void add_timespec(struct timespec *ts, int64 addtime);
 #define stack64k (64 * 1024) // Stack size for threads
 #define NSEC_PER_SEC 1000000000   // Number of nanoseconds in one second
 #define EC_TIMEOUTMON 5000        // Timeout for monitoring in microseconds
+#define MAX_VELOCITY 30000        // Maximum velocity
+#define MAX_ACCELERATION 50000    // Maximum acceleration
 
-// Conversion units from the servomotor
+// Conversion units for the servomotor
 float Cnt_to_deg = 0.000686645; // Conversion factor from counts to degrees
 int8_t SLAVE_ID; // Slave ID for EtherCAT communication
 
-// Add protection parameters at the top of the file after global variables
-#define MAX_SAFE_TORQUE 100     // Maximum safe torque value (adjust based on your motor)
-#define MIN_SAFE_TORQUE -100    // Minimum safe torque value
-#define TORQUE_WARNING_THRESHOLD 90  // Warning threshold at 90% of max torque
-bool emergency_stop = false;    // Emergency stop flag
+// Structure for RXPDO (Control data sent to slave)
+typedef struct {
+    uint16_t controlword;      // 0x6040:0, 16 bits
+    int16_t target_torque;    // 0x6071:0, 16 bits
+    uint8_t mode_of_operation; // 0x6060:0, 8 bits
+    uint8_t padding;          // 8 bits padding for alignment
+} __attribute__((__packed__)) rxpdo_t;
+
+// Structure for TXPDO (Status data received from slave)
+typedef struct {
+    uint16_t statusword;      // 0x6041:0, 16 bits
+    int32_t actual_position;  // 0x6064:0, 32 bits
+    int32_t actual_velocity;  // 0x606C:0, 32 bits
+    int16_t actual_torque;    // 0x6077:0, 16 bits
+} __attribute__((__packed__)) txpdo_t;
+
+// Global variables
+volatile int target_position = 0;
+pthread_mutex_t target_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t target_position_cond = PTHREAD_COND_INITIALIZER;
+bool target_updated = false;
+int32_t received_target = 0;
+
+rxpdo_t rxpdo;  // Global variable, used for sending data to slaves
+txpdo_t txpdo;  // Global variable, used for receiving data from slaves
+
+struct MotorStatus {
+    bool is_operational;
+    uint16_t status_word;
+    int32_t actual_position;
+    int32_t actual_velocity;
+    int16_t actual_torque;
+} motor_status;
+
+// Function to update motor status information
+void update_motor_status(int slave_id) {
+    // Update status information from TXPDO
+    motor_status.status_word = txpdo.statusword;
+    motor_status.actual_position = txpdo.actual_position;
+    motor_status.actual_velocity = txpdo.actual_velocity;
+    motor_status.actual_torque = txpdo.actual_torque;
+    
+    // Check status word to determine if motor is operational
+    // Bits 0-3 should be 0111 for enabled and ready state
+    motor_status.is_operational = (txpdo.statusword & 0x0F) == 0x07;
+}
 
 //##################################################################################################
 // Function: Set the CPU affinity for a thread
@@ -159,45 +202,36 @@ int erob_test() {
     uint32 map_object; // Variable to hold the mapping object
     uint16 clear_val = 0x0000; // Value to clear the mapping
 
-    for(int i = 1; i <= ec_slavecount; i++) { // Loop through each slave
-        // 1. First, disable PDO
+    for(int i = 1; i <= ec_slavecount; i++) {
+        // Clear RXPDO mapping
         retval += ec_SDOwrite(i, 0x1600, 0x00, FALSE, sizeof(zero_map), &zero_map, EC_TIMEOUTSAFE);
         
-        // 2. Configure new PDO mapping
-        // Add Control Word
-        map_object = 0x60400010;  // 0x6040:0 Control Word, 16 bits
+        // Control Word (0x6040:0, 16 bits)
+        map_object = 0x60400010;
         retval += ec_SDOwrite(i, 0x1600, 0x01, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Target Torque
-        map_object = 0x60710010;  // 0x6071:0 Target Torque, 16 bits
+        // Target Torque (0x6071:0, 16 bits)
+        map_object = 0x60710010;
         retval += ec_SDOwrite(i, 0x1600, 0x02, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Torque Slope
-        map_object = 0x60870020;  // 0x6087:0 Torque Slope, 32 bits
+        // Mode of Operation (0x6060:0, 8 bits)
+        map_object = 0x60600008;
         retval += ec_SDOwrite(i, 0x1600, 0x03, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Max Torque
-        map_object = 0x60720010;  // 0x6072:0 Max Torque, 16 bits
+        // Padding (8 bits)
+        map_object = 0x00000008;
         retval += ec_SDOwrite(i, 0x1600, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Modes of Operation
-        map_object = 0x60600008;  // 0x6060:0 Modes of Operation, 8 bits
-        retval += ec_SDOwrite(i, 0x1600, 0x05, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
-        
-        // Add 8-bit padding
-        map_object = 0x00000008;  // 8-bit padding
-        retval += ec_SDOwrite(i, 0x1600, 0x06, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
-        
-        // Change the number of PDO mappings to 6 (including padding)
-        uint8 map_count = 6;  // Mapped 6 objects
+        // Set number of mapped objects
+        uint8 map_count = 4;
         retval += ec_SDOwrite(i, 0x1600, 0x00, FALSE, sizeof(map_count), &map_count, EC_TIMEOUTSAFE);
         
-        // 4. Configure RXPDO allocation
-        clear_val = 0x0000; // Clear the mapping
+        // Configure RXPDO assignment
+        clear_val = 0x0000;
         retval += ec_SDOwrite(i, 0x1c12, 0x00, FALSE, sizeof(clear_val), &clear_val, EC_TIMEOUTSAFE);
-        map_1c12 = 0x1600; // Set the mapping to the new PDO
+        map_1c12 = 0x1600;
         retval += ec_SDOwrite(i, 0x1c12, 0x01, FALSE, sizeof(map_1c12), &map_1c12, EC_TIMEOUTSAFE);
-        map_1c12 = 0x0001; // Set the mapping index
+        map_1c12 = 0x0001;
         retval += ec_SDOwrite(i, 0x1c12, 0x00, FALSE, sizeof(map_1c12), &map_1c12, EC_TIMEOUTSAFE);
     }
 
@@ -219,7 +253,6 @@ int erob_test() {
         clear_val = 0x0000;
         retval += ec_SDOwrite(i, 0x1A00, 0x00, FALSE, sizeof(clear_val), &clear_val, EC_TIMEOUTSAFE);
 
-        // Configure TXPDO mapping entries
         // Status Word (0x6041:0, 16 bits)
         map_object = 0x60410010;
         retval += ec_SDOwrite(i, 0x1A00, 0x01, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
@@ -236,22 +269,29 @@ int erob_test() {
         map_object = 0x60770010;
         retval += ec_SDOwrite(i, 0x1A00, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
 
-        // Set the number of mapped objects (4 objects)
+        // Set number of mapped objects
         uint8 map_count = 4;
         retval += ec_SDOwrite(i, 0x1A00, 0x00, FALSE, sizeof(map_count), &map_count, EC_TIMEOUTSAFE);
 
         // Configure TXPDO assignment
-        // First, clear the assignment
         clear_val = 0x0000;
         retval += ec_SDOwrite(i, 0x1C13, 0x00, FALSE, sizeof(clear_val), &clear_val, EC_TIMEOUTSAFE);
-
-        // Assign TXPDO to 0x1A00
         map_1c13 = 0x1A00;
         retval += ec_SDOwrite(i, 0x1C13, 0x01, FALSE, sizeof(map_1c13), &map_1c13, EC_TIMEOUTSAFE);
-
-        // Set the number of assigned PDOs (1 PDO)
         map_1c13 = 0x0001;
         retval += ec_SDOwrite(i, 0x1C13, 0x00, FALSE, sizeof(map_1c13), &map_1c13, EC_TIMEOUTSAFE);
+
+        // Add extra torque related parameter configuration
+        int16_t torque_slope = 100;        // Torque slope (rate of change)
+        int16_t torque_profile = 0;        // Torque profile
+        int16_t positive_torque_limit = 0; // Positive torque limit
+        int16_t negative_torque_limit = 0; // Negative torque limit
+        
+        // Set torque related parameters
+        //ec_SDOwrite(i, 0x6087, 0x00, FALSE, sizeof(torque_slope), &torque_slope, EC_TIMEOUTSAFE);
+        //ec_SDOwrite(i, 0x6074, 0x00, FALSE, sizeof(torque_profile), &torque_profile, EC_TIMEOUTSAFE);
+        ec_SDOwrite(i, 0x60E0, 0x00, FALSE, sizeof(positive_torque_limit), &positive_torque_limit, EC_TIMEOUTSAFE);
+        ec_SDOwrite(i, 0x60E1, 0x00, FALSE, sizeof(negative_torque_limit), &negative_torque_limit, EC_TIMEOUTSAFE);
     }
 
     printf("Slave %d TXPDO mapping configuration result: %d\n", SLAVE_ID, retval);
@@ -284,7 +324,7 @@ int erob_test() {
         printf("Slave %d: Type %d, Address 0x%02x, State Machine actual %d, required %d\n", 
                i, ec_slave[i].eep_id, ec_slave[i].configadr, ec_slave[i].state, EC_STATE_INIT);
         printf("___________________________________________\n");
-        ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);  //Synchronize the distributed clock for the slave
+        ecx_dcsync0(&ecx_context, i, TRUE, 500000, 0);  //Synchronize the distributed clock for the slave
     }
 
     // Map the configured PDOs to the IOmap
@@ -363,13 +403,27 @@ int erob_test() {
     printf("___________________________________________\n");
 
     my_RA = 0; // Reset read access variable
-    for (int cnt = 1; cnt <= ec_slavecount; cnt++) { // Loop through each slave
-        ec_SDOread(cnt, 0x1c32, 0x01, FALSE, &rdl, &data_R, EC_TIMEOUTSAFE); // Read DC synchronization data
-        printf("Slave %d DC synchronized 0x1c32: %d\n", cnt, data_R); // Print the synchronization data for each slave
-    }
+
 
     // 8. Transition to OP state
     printf("__________STEP 8___________________\n");
+
+    // Initialize PDO data
+    rxpdo.controlword = 0x0080;
+    rxpdo.target_torque = 0;
+    rxpdo.mode_of_operation = 10;  // CST mode (10)
+    rxpdo.padding = 0;
+    
+    // Send initial data
+    for (int slave = 1; slave <= ec_slavecount; slave++) {
+        memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+    }
+    ec_send_processdata();
+    wkc = ec_receive_processdata(EC_TIMEOUTRET);  // Ensure the first communication is successful
+
+    int step = 0;
+    int retry_count = 0;
+    const int MAX_RETRY = 3;
 
     // Send process data to the slaves
     ec_send_processdata();
@@ -402,200 +456,55 @@ int erob_test() {
     // 9. Configure servomotor and mode operation
     printf("__________STEP 9___________________\n");
 
-    if (ec_slave[0].state == EC_STATE_OPERATIONAL) { // Check if the first slave is in OP state
-        printf("######################################################################################\n");
-        printf("################# All slaves entered into OP state! ##################################\n");
+    if (ec_slave[0].state == EC_STATE_OPERATIONAL) {
+        printf("Operational state reached for all slaves.\n");
         
-        uint16_t Control_Word = 0x0000; // Initialize control word
-        uint8 operation_mode = 10;  // Set operation mode to Profile Torque Mode
+        uint8 operation_mode = 10;  // CST mode (10)
+        uint16_t Control_Word = 0;
+        int16_t Max_Torque = 100;  // Maximum torque limit
+        int16_t Torque_Slope = 100;  // Torque slope
         
-        // Set maximum torque limit
-        uint16_t max_torque = 200; // Maximum torque value
-        
-        for (int i = 1; i <= ec_slavecount; i++) { // Loop through each slave
-            // Set operation mode
-            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE); // Write operation mode to the slave
-            
-            // Set maximum torque
-            ec_SDOwrite(i, 0x6072, 0x00, FALSE, sizeof(max_torque), &max_torque, EC_TIMEOUTSAFE); // Write maximum torque to the slave
-            
-            // Set initial control word
-            ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(Control_Word), &Control_Word, EC_TIMEOUTSAFE); // Write control word to the slave
-        }
-        // Record start time
-
-        auto start = std::chrono::high_resolution_clock::now();
-        // osal_usleep(1000000); // Optional sleep for 1 second (commented out)
-        int step = 0; // Initialize step counter
-
-        // Loop for a specified duration (3 hours in milliseconds)
-        for(i = 1; i <= 3 * 60 * 60 * 1000; i++) {
-            ec_send_processdata(); // Send process data to the slaves
-            wkc = ec_receive_processdata(EC_TIMEOUTRET); // Receive process data and store the Work Counter
-
-            // Check if the Work Counter is as expected
-            if(wkc >= expectedWKC) {
-                printf("Processdata cycle %4d, WKC %d\n", i, wkc);
-                
-                // Read TxPDO data
-                for(int slave = 1; slave <= ec_slavecount; slave++) {
-                    uint8_t* input = ec_slave[slave].inputs;
-                    
-                    // Read status word (16-bit)
-                    uint16_t statusword = *(uint16_t*)(input + 0);
-                    
-                    // Read actual torque (16-bit)
-                    int16_t actual_torque = *(int16_t*)(input + 10);
-                    
-                    // Current protection logic
-                    if (actual_torque > MAX_SAFE_TORQUE || actual_torque < MIN_SAFE_TORQUE) {
-                        printf("ERROR: Torque exceeded safety limits! Actual torque: %d\n", actual_torque);
-                        emergency_stop = true;
-                        // Immediately stop the motor
-                        uint16_t quick_stop_word = 0x0002;  // Quick stop command
-                        memcpy(ec_slave[slave].outputs, &quick_stop_word, sizeof(quick_stop_word));
-                        ec_send_processdata();
-                        printf("Emergency stop activated for slave %d\n", slave);
-                    } else if (abs(actual_torque) > TORQUE_WARNING_THRESHOLD) {
-                        printf("WARNING: Torque approaching safety limit! Actual torque: %d\n", actual_torque);
-                    }
-                    
-                    // Print information
-                    printf("Slave %d:\n", slave);
-                    printf("  Status Word: 0x%04x\n", statusword);
-                    printf("  Torque: %d (Safety Limits: %d to %d)\n", 
-                           actual_torque, MIN_SAFE_TORQUE, MAX_SAFE_TORQUE);
-                    
-                    // Parse status word states
-                    printf("  State: ");
-                    if (statusword & 0x0001) printf("Ready to switch on ");
-                    if (statusword & 0x0002) printf("Switched on ");
-                    if (statusword & 0x0004) printf("Operation enabled ");
-                    if (statusword & 0x0008) printf("Fault ");
-                    if (statusword & 0x0010) printf("Voltage enabled ");
-                    if (statusword & 0x0020) printf("Quick stop ");
-                    if (statusword & 0x0040) printf("Switch on disabled ");
-                    if (statusword & 0x0080) printf("Warning ");
-                    printf("\n");
-                }
-                printf("----------------------------------------\n");
-                
-                needlf = TRUE;
-            }
-
-            uint16 output_data[6] = {0};  // Reduced size for CST mode
-
-            // Only execute normal control logic if emergency stop is not triggered
-            if (!emergency_stop) {
-                // Control logic based on the step counter
-                if (step <= 200) {
-                    // Initial state
-                    output_data[0] = 0x0080;  // Initial state command
-                    output_data[1] = 0;       // Target torque set to 0
-                    output_data[2] = 1000;    // Torque slope
-                    output_data[3] = 0;       // High 16 bits of torque slope
-                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
-                    output_data[5] = 4;       // CST mode
-                } else if (step <= 300) {
-                    // Shutdown command
-                    output_data[0] = 0x0006;  // Shutdown command
-                    output_data[1] = 0;       // Target torque
-                    output_data[2] = 1000;    // Torque slope
-                    output_data[3] = 0;       // High 16 bits of torque slope
-                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
-                    output_data[5] = 4;       // CST mode
-                } else if (step <= 400) {
-                    // Switch On command
-                    output_data[0] = 0x0007;  // Switch On command
-                    output_data[1] = 0;       // Target torque
-                    output_data[2] = 1000;    // Torque slope
-                    output_data[3] = 0;       // High 16 bits of torque slope
-                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
-                    output_data[5] = 4;       // CST mode
-                } else if (step <= 500) {
-                    // Enable Operation command
-                    output_data[0] = 0x000F;  // Enable Operation command
-                    output_data[1] = 0;       // Target torque
-                    output_data[2] = 1000;    // Torque slope
-                    output_data[3] = 0;       // High 16 bits of torque slope
-                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
-                    output_data[5] = 4;       // CST mode
-                } else if (step <= 600) {
-                    // Test over-limit torque value
-                    output_data[0] = 0x000F;  // Maintain enabled state
-                    output_data[1] = 120;     // Try to set torque above limit (120 > 100)
-                    output_data[2] = 1000;    // Torque slope
-                    output_data[3] = 0;       // High 16 bits of torque slope
-                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque still limited to safe value
-                    output_data[5] = 4;       // CST mode
-                    printf("Testing over-limit torque: Attempting to set torque to 120\n");
-                } else {
-                    // After enabling, set target torque
-                    output_data[0] = 0x000F;  // Maintain enabled state
-                    output_data[1] = 120;     // Target torque (will be limited by safety check)
-                    output_data[2] = 1000;    // Torque slope
-                    output_data[3] = 0;       // High 16 bits of torque slope
-                    output_data[4] = MAX_SAFE_TORQUE;     // Maximum torque limited to safe value
-                    output_data[5] = 4;       // CST mode
-                }
-
-                // Add safety check for target torque
-                if (output_data[1] > MAX_SAFE_TORQUE) {
-                    printf("WARNING: Target torque %d exceeds limit, clamping to %d\n", 
-                           output_data[1], MAX_SAFE_TORQUE);
-                    output_data[1] = MAX_SAFE_TORQUE;
-                } else if (output_data[1] < MIN_SAFE_TORQUE) {
-                    printf("WARNING: Target torque %d below limit, clamping to %d\n", 
-                           output_data[1], MIN_SAFE_TORQUE);
-                    output_data[1] = MIN_SAFE_TORQUE;
-                }
-            } else {
-                // Output in emergency stop state
-                output_data[0] = 0x0002;  // Quick stop command
-                output_data[1] = 0;       // Zero torque
-                output_data[2] = 1000;    // Fast torque slope for quick stop
-                output_data[3] = 0;
-                output_data[4] = MAX_SAFE_TORQUE;
-                output_data[5] = 4;
-            }
-
-            // Send output data to each slave
-            for (int i = 1; i <= ec_slavecount; i++) {
-                memcpy(ec_slave[i].outputs, output_data, sizeof(output_data)); // Copy output data to the slave
-            }
-
-            // Increment step counter until it reaches 900
-            if(step < 900) {
-                step += 1; // Increment step
-            }
-
-            osal_usleep(1000); // Sleep for 1 millisecond
-            // Record end time (commented out)
-        }
-
-        osal_usleep(1e6);
-
-        ec_close();
-
-         printf("\nRequest init state for all slaves\n");
-         ec_slave[0].state = EC_STATE_INIT;
-         /* request INIT state for all slaves */
-         ec_writestate(0);
-
-        printf("EtherCAT master closed.\n");
-    } else {
-        printf("Not all slaves reached operational state.\n");
-
-        ec_readstate();
         for (int i = 1; i <= ec_slavecount; i++) {
-            if (ec_slave[i].state != EC_STATE_OPERATIONAL) {
-                printf("Slave %d State=0x%2.2x StatusCode=0x%4.4x : %s\n", i, ec_slave[i].state, ec_slave[i].ALstatuscode, ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
-                printf("Requesting INIT state for slave %d\n", i);
-                ec_slave[i].state = EC_STATE_INIT;
-                printf("___________________________________________\n");
+            // First, disable the motor
+            Control_Word = 0x0000;
+            ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(Control_Word), &Control_Word, EC_TIMEOUTSAFE);
+            osal_usleep(100000);
+
+            // Set operation mode to CST
+            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE);
+            osal_usleep(100000);
+
+            // Set maximum torque limit
+            ec_SDOwrite(i, 0x6072, 0x00, FALSE, sizeof(Max_Torque), &Max_Torque, EC_TIMEOUTSAFE);
+            
+            // Set torque slope
+            ec_SDOwrite(i, 0x6087, 0x00, FALSE, sizeof(Torque_Slope), &Torque_Slope, EC_TIMEOUTSAFE);
+            
+            osal_usleep(100000);
+            
+            // Verify if the mode was set successfully
+            uint8 actual_mode;
+            int size = sizeof(actual_mode);
+            if (ec_SDOread(i, 0x6061, 0x00, FALSE, &size, &actual_mode, EC_TIMEOUTSAFE) > 0) {
+                printf("Actual operation mode: %d\n", actual_mode);
             }
+        }
+
+        while(1) {
+            osal_usleep(100000);
         }
     }
+
+    osal_usleep(1e6);
+
+    ec_close();
+
+     printf("\nRequest init state for all slaves\n");
+     ec_slave[0].state = EC_STATE_INIT;
+     /* request INIT state for all slaves */
+     ec_writestate(0);
+
+    printf("EtherCAT master closed.\n");
 
     return 0;
 }
@@ -647,55 +556,76 @@ void add_timespec(struct timespec *ts, int64 addtime) {
 OSAL_THREAD_FUNC ecatcheck(void *ptr) {
     int slave; // Variable to hold the current slave index
     (void)ptr; // Not used
+    int consecutive_errors = 0;
+    const int MAX_CONSECUTIVE_ERRORS = 5;
 
-    while (1) { // Infinite loop for monitoring
+    while (1) {
         if (inOP && ((wkc < expectedWKC) || ec_group[currentgroup].docheckstate)) {
             if (needlf) {
-                needlf = FALSE; // Reset line feed flag
-                printf("\n"); // Print a new line
+                needlf = FALSE;
+                printf("\n");
             }
-            ec_group[currentgroup].docheckstate = FALSE; // Reset check state
-            ec_readstate(); // Read the state of all slaves
-            for (slave = 1; slave <= ec_slavecount; slave++) { // Loop through each slave
+            
+            // Increase the consecutive error count
+            if (wkc < expectedWKC) {
+                consecutive_errors++;
+                printf("WARNING: Working counter error (%d/%d), consecutive errors: %d\n", 
+                       wkc, expectedWKC, consecutive_errors);
+            } else {
+                consecutive_errors = 0;
+            }
+
+            // If the consecutive errors exceed the threshold, attempt reinitialization
+            if (consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
+                printf("ERROR: Too many consecutive errors, attempting recovery...\n");
+                ec_group[currentgroup].docheckstate = TRUE;
+                // Reset the error count
+                consecutive_errors = 0;
+            }
+
+            ec_group[currentgroup].docheckstate = FALSE;
+            ec_readstate();
+            for (slave = 1; slave <= ec_slavecount; slave++) {
                 if ((ec_slave[slave].group == currentgroup) && (ec_slave[slave].state != EC_STATE_OPERATIONAL)) {
-                    ec_group[currentgroup].docheckstate = TRUE; // Set check state if slave is not operational
+                    ec_group[currentgroup].docheckstate = TRUE;
                     if (ec_slave[slave].state == (EC_STATE_SAFE_OP + EC_STATE_ERROR)) {
                         printf("ERROR: Slave %d is in SAFE_OP + ERROR, attempting ack.\n", slave);
-                        ec_slave[slave].state = (EC_STATE_SAFE_OP + EC_STATE_ACK); // Acknowledge error state
-                        ec_writestate(slave); // Write the state change to the slave
+                        ec_slave[slave].state = (EC_STATE_SAFE_OP + EC_STATE_ACK);
+                        ec_writestate(slave);
                     } else if (ec_slave[slave].state == EC_STATE_SAFE_OP) {
                         printf("WARNING: Slave %d is in SAFE_OP, changing to OPERATIONAL.\n", slave);
-                        ec_slave[slave].state = EC_STATE_OPERATIONAL; // Change state to operational
-                        ec_writestate(slave); // Write the state change to the slave
+                        ec_slave[slave].state = EC_STATE_OPERATIONAL;
+                        ec_writestate(slave);
                     } else if (ec_slave[slave].state > EC_STATE_NONE) {
-                        if (ec_reconfig_slave(slave, EC_TIMEOUTMON)) { // Reconfigure the slave if needed
-                            ec_slave[slave].islost = FALSE; // Mark slave as found
+                        if (ec_reconfig_slave(slave, EC_TIMEOUTMON)) {
+                            ec_slave[slave].islost = FALSE;
                             printf("MESSAGE: Slave %d reconfigured\n", slave);
                         }
                     } else if (!ec_slave[slave].islost) {
-                        ec_statecheck(slave, EC_STATE_OPERATIONAL,  EC_TIMEOUTRET); // Check the state of the slave
-                        if (ec_slave[slave].state == EC_STATE_NONE) {
-                            ec_slave[slave].islost = TRUE; // Mark slave as lost
+                        ec_statecheck(slave, EC_STATE_OPERATIONAL, EC_TIMEOUTRET);
+                        if (!ec_slave[slave].state) {
+                            ec_slave[slave].islost = TRUE;
                             printf("ERROR: Slave %d lost\n", slave);
                         }
                     }
                 }
-                if (ec_slave[slave].islost) { // If the slave is marked as lost
-                    if (ec_slave[slave].state == EC_STATE_NONE) {
-                        if (ec_recover_slave(slave, EC_TIMEOUTMON)) { // Attempt to recover the lost slave
-                            ec_slave[slave].islost = FALSE; // Mark slave as found
+                if (ec_slave[slave].islost) {
+                    if (!ec_slave[slave].state) {
+                        if (ec_recover_slave(slave, EC_TIMEOUTMON)) {
+                            ec_slave[slave].islost = FALSE;
                             printf("MESSAGE: Slave %d recovered\n", slave);
                         }
                     } else {
-                        ec_slave[slave].islost = FALSE; // Mark slave as found
+                        ec_slave[slave].islost = FALSE;
                         printf("MESSAGE: Slave %d found\n", slave);
                     }
                 }
             }
             if (!ec_group[currentgroup].docheckstate) {
-                printf("OK: All slaves resumed OPERATIONAL.\n"); // Confirm all slaves are operational
+                printf("OK: All slaves resumed OPERATIONAL.\n");
             }
         }
+        osal_usleep(10000); 
     }
 }
 
@@ -710,7 +640,10 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
     struct timespec ts, tleft;
     int ht;
     int64 cycletime;
-    struct timeval tp;
+    int missed_cycles = 0;
+    const int MAX_MISSED_CYCLES = 10;
+    struct timespec cycle_start, cycle_end;
+    long cycle_time_ns;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     ht = (ts.tv_nsec / 1000000) + 1;
@@ -723,33 +656,147 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
 
     toff = 0;
     dorun = 0;
+    
+    // Initialize PDO data
+    rxpdo.controlword = 0x0080;
+    rxpdo.target_torque = 0;
+    rxpdo.mode_of_operation = 10;  // CST mode (10)
+    rxpdo.padding = 0;
+    
+    // Send initial data
+    for (int slave = 1; slave <= ec_slavecount; slave++) {
+        memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+    }
     ec_send_processdata();
+    wkc = ec_receive_processdata(EC_TIMEOUTRET);  // Ensure the first communication is successful
+
+    int step = 0;
+    int retry_count = 0;
+    const int MAX_RETRY = 3;
 
     while (1) {
-        dorun++;
+        clock_gettime(CLOCK_MONOTONIC, &cycle_start);
+        
         add_timespec(&ts, cycletime + toff);
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft);
+        if (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft) != 0) {
+            missed_cycles++;
+            if (missed_cycles >= MAX_MISSED_CYCLES) {
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                ts.tv_nsec = ((ts.tv_nsec / 1000000) + 1) * 1000000;
+                if (ts.tv_nsec >= NSEC_PER_SEC) {
+                    ts.tv_sec++;
+                    ts.tv_nsec -= NSEC_PER_SEC;
+                }
+                missed_cycles = 0;
+            }
+        } else {
+            missed_cycles = 0;
+        }
+        
+        dorun++;
 
         if (start_ecatthread_thread) {
+            // Receive process data
             wkc = ec_receive_processdata(EC_TIMEOUTRET);
 
+            if (wkc >= expectedWKC) {
+                retry_count = 0;  // Reset retry count
+                
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
+                }
+
+                // State machine control
+                if (step <= 1000) {
+                    rxpdo.controlword = 0x0080;
+                    rxpdo.target_torque = 0;
+                } else if (step <= 1300) {
+                    rxpdo.controlword = 0x0006;
+                    rxpdo.target_torque = 0;
+                } else if (step <= 1600) {
+                    rxpdo.controlword = 0x0007;
+                    rxpdo.target_torque = 0;
+                } else if (step <= 2000) {
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_torque = 0;
+                } else {
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_torque = 50;  // Set target torque to 100
+                }
+                rxpdo.mode_of_operation = 10;  // CST mode (10)
+                rxpdo.padding = 0;
+
+                // Send data to slaves
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+                }
+
+                if (dorun % 100 == 0) {
+                    printf("Status: SW=0x%04x, pos=%d, vel=%d, target_torque=%d, mode=%d\n",
+                           txpdo.statusword,
+                           txpdo.actual_position, txpdo.actual_velocity,
+                           rxpdo.target_torque, rxpdo.mode_of_operation);
+                }
+
+                if (step < 8000) {
+                    step++;
+                }
+            } else {
+                retry_count++;
+                if (retry_count >= MAX_RETRY) {
+                    printf("ERROR: Communication failure after %d retries\n", retry_count);
+                    retry_count = 0;
+                }
+            }
+
+            // Clock synchronization
             if (ec_slave[0].hasdc) {
                 ec_sync(ec_DCtime, cycletime, &toff);
             }
 
+            // Send process data
             ec_send_processdata();
+        }
+
+        // Monitor cycle time
+        clock_gettime(CLOCK_MONOTONIC, &cycle_end);
+        cycle_time_ns = (cycle_end.tv_sec - cycle_start.tv_sec) * NSEC_PER_SEC +
+                       (cycle_end.tv_nsec - cycle_start.tv_nsec);
+        
+        if (cycle_time_ns > cycletime * 1.5) {
+            printf("WARNING: Cycle time exceeded: %ld ns (expected: %ld ns)\n", 
+                   cycle_time_ns, cycletime);
         }
     }
 }
 
+int correct_count = 0;
+int incorrect_count = 0;
+int test_count_sum = 100;
+int test_count = 0;
+float correct_rate = 0;
+
+// Main function
 int main(int argc, char **argv) {
     needlf = FALSE;
     inOP = FALSE;
     start_ecatthread_thread = FALSE;
     dorun = 0;
-    ctime_thread = 1000; // 1ms cycle time
+    ctime_thread = 1000;  // Increase cycle time to 1ms
 
-    // Set main thread to CPU 3
+    // Set highest real-time priority
+    struct sched_param param;
+    param.sched_priority = 99;
+    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
+        perror("sched_setscheduler failed");
+    }
+
+    // Lock memory
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
+        perror("mlockall failed");
+    }
+
+    // Set CPU affinity
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(3, &cpuset);
@@ -759,34 +806,13 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    printf("Main thread running on CPU core 3 (4th core)\n");
+    // Set thread priority and affinity
+    struct sched_param thread_param;
+    thread_param.sched_priority = 98;
+    pthread_setschedparam(pthread_self(), SCHED_FIFO, &thread_param);
 
-    // Create and set real-time EtherCAT thread on CPU 2
-    start_ecatthread_thread = TRUE;
-    osal_thread_create_rt(&thread1, stack64k * 2, (void *)&ecatthread, (void *)&ctime_thread);
-    
-    // Set CPU affinity for real-time thread
-    pthread_t thread1_handle = *(pthread_t *)thread1;
-    cpu_set_t cpuset2;
-    CPU_ZERO(&cpuset2);
-    CPU_SET(2, &cpuset2);
-    if (pthread_setaffinity_np(thread1_handle, sizeof(cpu_set_t), &cpuset2) != 0) {
-        printf("Failed to set CPU affinity for real-time thread\n");
-    } else {
-        printf("Real-time thread running on CPU core 2 (3rd core)\n");
-    }
-
-    // Create and set monitoring thread on CPU 3
-    osal_thread_create(&thread2, stack64k * 2, (void *)&ecatcheck, NULL);
-    pthread_t thread2_handle = *(pthread_t *)thread2;
-    if (pthread_setaffinity_np(thread2_handle, sizeof(cpu_set_t), &cpuset) != 0) {
-        printf("Failed to set CPU affinity for monitoring thread\n");
-    } else {
-        printf("Monitoring thread running on CPU core 3 (4th core)\n");
-    }
-
+    printf("Running on CPU core 3\n");
     erob_test();
-
     printf("End program\n");
 
     return EXIT_SUCCESS;

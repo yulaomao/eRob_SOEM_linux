@@ -15,6 +15,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include <sys/time.h>
 #include <pthread.h>
@@ -27,7 +28,6 @@
 #include <cstdint>
 
 #include <sched.h>
-
 
 // Global variables for EtherCAT communication
 char IOmap[4096]; // I/O mapping for EtherCAT
@@ -44,7 +44,7 @@ int64 toff, gl_delta; // Time offset and global delta for synchronization
 
 // Function prototypes for EtherCAT thread functions
 OSAL_THREAD_FUNC ecatcheck(void *ptr); // Function to check the state of EtherCAT slaves
-OSAL_THREAD_FUNC ecatthread(void *ptr); // Real-time EtherCAT thread function
+OSAL_THREAD_FUNC_RT ecatthread(void *ptr); // Real-time EtherCAT thread function
 
 // Thread handles for the EtherCAT threads
 OSAL_THREAD_HANDLE thread1; // Handle for the EtherCAT check thread
@@ -59,19 +59,19 @@ void add_timespec(struct timespec *ts, int64 addtime);
 #define stack64k (64 * 1024) // Stack size for threads
 #define NSEC_PER_SEC 1000000000   // Number of nanoseconds in one second
 #define EC_TIMEOUTMON 5000        // Timeout for monitoring in microseconds
+#define MAX_VELOCITY 30000        // Maximum velocity
+#define MAX_ACCELERATION 50000    // Maximum acceleration
 
-// Conversion units from the servomotor
+// Conversion units for the servomotor
 float Cnt_to_deg = 0.000686645; // Conversion factor from counts to degrees
 int8_t SLAVE_ID; // Slave ID for EtherCAT communication
 
 // Structure for RXPDO (Control data sent to slave)
 typedef struct {
-    uint16_t controlword;     // 0x6040:0, 16 bits
-    int16_t target_torque;    // 0x6071:0, 16 bits
-    int32_t torque_slope;     // 0x6087:0, 32 bits
-    uint16_t max_torque;      // 0x6072:0, 16 bits
-    uint8_t mode_of_operation;// 0x6060:0, 8 bits
-    uint8_t padding;          // 8 bits padding
+    uint16_t controlword;      // 0x6040:0, 16 bits
+    int32_t target_velocity;   // 0x60FF:0, 32 bits
+    uint8_t mode_of_operation; // 0x6060:0, 8 bits
+    uint8_t padding;          // 8 bits padding for alignment
 } __attribute__((__packed__)) rxpdo_t;
 
 // Structure for TXPDO (Status data received from slave)
@@ -81,6 +81,37 @@ typedef struct {
     int32_t actual_velocity;  // 0x606C:0, 32 bits
     int16_t actual_torque;    // 0x6077:0, 16 bits
 } __attribute__((__packed__)) txpdo_t;
+
+// Global variables
+volatile int target_position = 0;
+pthread_mutex_t target_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t target_position_cond = PTHREAD_COND_INITIALIZER;
+bool target_updated = false;
+int32_t received_target = 0;
+
+rxpdo_t rxpdo;  // Global variable, used for sending data to slaves
+txpdo_t txpdo;  // Global variable, used for receiving data from slaves
+
+struct MotorStatus {
+    bool is_operational;
+    uint16_t status_word;
+    int32_t actual_position;
+    int32_t actual_velocity;
+    int16_t actual_torque;
+} motor_status;
+
+// Function to update motor status information
+void update_motor_status(int slave_id) {
+    // Update status information from TXPDO
+    motor_status.status_word = txpdo.statusword;
+    motor_status.actual_position = txpdo.actual_position;
+    motor_status.actual_velocity = txpdo.actual_velocity;
+    motor_status.actual_torque = txpdo.actual_torque;
+    
+    // Check status word to determine if motor is operational
+    // Bits 0-3 should be 0111 for enabled and ready state
+    motor_status.is_operational = (txpdo.statusword & 0x0F) == 0x07;
+}
 
 //##################################################################################################
 // Function: Set the CPU affinity for a thread
@@ -164,58 +195,48 @@ int erob_test() {
     //3.- Map RXPOD
     printf("__________STEP 3___________________\n");
 
-    // Clear RXPDO mapping
-    int retval = 0; // Variable to hold the return value of SDO write operations
-    uint16 map_1c12; // Variable to hold the mapping for PDO
-    uint8 zero_map = 0; // Variable to clear the PDO mapping
-    uint32 map_object; // Variable to hold the mapping object
-    uint16 clear_val = 0x0000; // Value to clear the mapping
+    // Modify PDO mapping configuration
+    int retval = 0;
+    uint16 map_1c12;
+    uint8 zero_map = 0;
+    uint32 map_object;
+    uint16 clear_val = 0x0000;
 
-    for(int i = 1; i <= ec_slavecount; i++) { // Loop through each slave
-        // 1. First, disable PDO
+    for(int i = 1; i <= ec_slavecount; i++) {
+        // Clear RXPDO mapping
         retval += ec_SDOwrite(i, 0x1600, 0x00, FALSE, sizeof(zero_map), &zero_map, EC_TIMEOUTSAFE);
         
-        // 2. Configure new PDO mapping
-        // Add Control Word
-        map_object = 0x60400010;  // 0x6040:0 Control Word, 16 bits
+        // Control word (0x6040:0, 16 bits)
+        map_object = 0x60400010;
         retval += ec_SDOwrite(i, 0x1600, 0x01, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Target Torque
-        map_object = 0x60710010;  // 0x6071:0 Target Torque, 16 bits
+        // Target velocity (0x60FF:0, 32 bits)
+        map_object = 0x60FF0020;
         retval += ec_SDOwrite(i, 0x1600, 0x02, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Torque Slope
-        map_object = 0x60870020;  // 0x6087:0 Torque Slope, 32 bits
+        // Operation mode (0x6060:0, 8 bits)
+        map_object = 0x60600008;
         retval += ec_SDOwrite(i, 0x1600, 0x03, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Max Torque
-        map_object = 0x60720010;  // 0x6072:0 Max Torque, 16 bits
+        // Padding (8 bits padding)
+        map_object = 0x00000008;
         retval += ec_SDOwrite(i, 0x1600, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Add Modes of Operation
-        map_object = 0x60600008;  // 0x6060:0 Modes of Operation, 8 bits
-        retval += ec_SDOwrite(i, 0x1600, 0x05, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
-        
-        // Add 8-bit padding
-        map_object = 0x00000008;  // 8-bit padding
-        retval += ec_SDOwrite(i, 0x1600, 0x06, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
-        
-        // Change the number of PDO mappings to 6 (including padding)
-        uint8 map_count = 6;  // Mapped 6 objects
+        uint8 map_count = 4;  // Now there are 4 objects, including padding
         retval += ec_SDOwrite(i, 0x1600, 0x00, FALSE, sizeof(map_count), &map_count, EC_TIMEOUTSAFE);
         
-        // 4. Configure RXPDO allocation
-        clear_val = 0x0000; // Clear the mapping
+        // Configure RXPDO allocation
+        clear_val = 0x0000;
         retval += ec_SDOwrite(i, 0x1c12, 0x00, FALSE, sizeof(clear_val), &clear_val, EC_TIMEOUTSAFE);
-        map_1c12 = 0x1600; // Set the mapping to the new PDO
+        map_1c12 = 0x1600;
         retval += ec_SDOwrite(i, 0x1c12, 0x01, FALSE, sizeof(map_1c12), &map_1c12, EC_TIMEOUTSAFE);
-        map_1c12 = 0x0001; // Set the mapping index
+        map_1c12 = 0x0001;
         retval += ec_SDOwrite(i, 0x1c12, 0x00, FALSE, sizeof(map_1c12), &map_1c12, EC_TIMEOUTSAFE);
     }
 
-    printf("PDO mapping configuration result: %d\n", retval);
+    printf("RXPDO mapping configuration result: %d\n", retval);
     if (retval < 0) {
-        printf("PDO mapping failed\n");
+        printf("RXPDO mapping failed\n");
         return -1;
     }
 
@@ -227,11 +248,10 @@ int erob_test() {
     retval = 0;
     uint16 map_1c13;
     for(int i = 1; i <= ec_slavecount; i++) {
-        // First, clear the TXPDO mapping
+        // Clear TXPDO mapping
         clear_val = 0x0000;
         retval += ec_SDOwrite(i, 0x1A00, 0x00, FALSE, sizeof(clear_val), &clear_val, EC_TIMEOUTSAFE);
 
-        // Configure TXPDO mapping entries
         // Status Word (0x6041:0, 16 bits)
         map_object = 0x60410010;
         retval += ec_SDOwrite(i, 0x1A00, 0x01, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
@@ -248,22 +268,18 @@ int erob_test() {
         map_object = 0x60770010;
         retval += ec_SDOwrite(i, 0x1A00, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
 
-        // Set the number of mapped objects (4 objects)
-        uint8 map_count = 4;
+        uint8 map_count = 4;  // Ensure mapping 4 objects
         retval += ec_SDOwrite(i, 0x1A00, 0x00, FALSE, sizeof(map_count), &map_count, EC_TIMEOUTSAFE);
 
-        // Configure TXPDO assignment
-        // First, clear the assignment
+        // Correctly configure TXPDO allocation
         clear_val = 0x0000;
         retval += ec_SDOwrite(i, 0x1C13, 0x00, FALSE, sizeof(clear_val), &clear_val, EC_TIMEOUTSAFE);
-
-        // Assign TXPDO to 0x1A00
         map_1c13 = 0x1A00;
         retval += ec_SDOwrite(i, 0x1C13, 0x01, FALSE, sizeof(map_1c13), &map_1c13, EC_TIMEOUTSAFE);
-
-        // Set the number of assigned PDOs (1 PDO)
         map_1c13 = 0x0001;
         retval += ec_SDOwrite(i, 0x1C13, 0x00, FALSE, sizeof(map_1c13), &map_1c13, EC_TIMEOUTSAFE);
+
+
     }
 
     printf("Slave %d TXPDO mapping configuration result: %d\n", SLAVE_ID, retval);
@@ -296,7 +312,7 @@ int erob_test() {
         printf("Slave %d: Type %d, Address 0x%02x, State Machine actual %d, required %d\n", 
                i, ec_slave[i].eep_id, ec_slave[i].configadr, ec_slave[i].state, EC_STATE_INIT);
         printf("___________________________________________\n");
-        ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);  //Synchronize the distributed clock for the slave
+        ecx_dcsync0(&ecx_context, i, TRUE, 500000, 0);  //Synchronize the distributed clock for the slave
     }
 
     // Map the configured PDOs to the IOmap
@@ -305,27 +321,53 @@ int erob_test() {
     printf("__________STEP 5___________________\n");
 
     // Ensure all slaves are in PRE-OP state
+    ec_readstate();
     for(int i = 1; i <= ec_slavecount; i++) {
-        if(ec_slave[i].state != EC_STATE_PRE_OP) { // Check if the slave is not in PRE-OP state
-            printf("Slave %d not in PRE-OP state. Current state: %d\n", i, ec_slave[i].state);
-            return -1; // Return error if any slave is not in PRE-OP state
+        if(ec_slave[i].state != EC_STATE_PRE_OP) {
+            printf("Slave %d not in PRE-OP state. Current state: %d, StatusCode=0x%4.4x : %s\n", 
+                   i, ec_slave[i].state, ec_slave[i].ALstatuscode, ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
+            return -1;
         }
     }
 
-    // Configure Distributed Clock (DC)
-    ec_configdc(); // Set up the distributed clock for synchronization
+    // Configure distributed clock
+    printf("Configuring DC...\n");
+    ec_configdc();
+    osal_usleep(200000);  // Wait for DC configuration to take effect
+
+    // Request to switch to SAFE-OP state before confirming DC configuration
+    for(int i = 1; i <= ec_slavecount; i++) {
+        printf("Slave %d DC status: 0x%4.4x\n", i, ec_slave[i].DCactive);
+        if(ec_slave[i].hasdc && !ec_slave[i].DCactive) {
+            printf("DC not active for slave %d\n", i);
+        }
+    }
 
     // Request to switch to SAFE-OP state
-    ec_slave[0].state = EC_STATE_SAFE_OP; // Set the first slave to SAFE-OP state
-    ec_writestate(0); // Write the state change to the slave
+    printf("Requesting SAFE_OP state...\n");
+    ec_slave[0].state = EC_STATE_SAFE_OP;
+    ec_writestate(0);
+    osal_usleep(200000);  // Give enough time for state transition
 
-    // Wait for the state transition
-    if (ec_statecheck(0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4) == EC_STATE_SAFE_OP) {
-        printf("Successfully changed to SAFE_OP state\n"); // Confirm successful state change
-    } else {
-        printf("Failed to change to SAFE_OP state\n");
-        return -1; // Return error if state change fails
+    // Check the result of the state transition
+    chk = 40;
+    do {
+        ec_readstate();
+        for(int i = 1; i <= ec_slavecount; i++) {
+            if(ec_slave[i].state != EC_STATE_SAFE_OP) {
+                printf("Slave %d State=0x%2.2x StatusCode=0x%4.4x : %s\n",
+                       i, ec_slave[i].state, ec_slave[i].ALstatuscode, ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
+            }
+        }
+        osal_usleep(100000);
+    } while (chk-- && (ec_slave[0].state != EC_STATE_SAFE_OP));
+
+    if (ec_slave[0].state != EC_STATE_SAFE_OP) {
+        printf("Failed to reach SAFE_OP state\n");
+        return -1;
     }
+
+    printf("Successfully reached SAFE_OP state\n");
 
     // Calculate the expected Work Counter (WKC)
     expectedWKC = (ec_group[0].outputsWKC * 2) + ec_group[0].inputsWKC; // Calculate expected WKC based on outputs and inputs
@@ -375,10 +417,7 @@ int erob_test() {
     printf("___________________________________________\n");
 
     my_RA = 0; // Reset read access variable
-    for (int cnt = 1; cnt <= ec_slavecount; cnt++) { // Loop through each slave
-        ec_SDOread(cnt, 0x1c32, 0x01, FALSE, &rdl, &data_R, EC_TIMEOUTSAFE); // Read DC synchronization data
-        printf("Slave %d DC synchronized 0x1c32: %d\n", cnt, data_R); // Print the synchronization data for each slave
-    }
+
 
     // 8. Transition to OP state
     printf("__________STEP 8___________________\n");
@@ -415,118 +454,43 @@ int erob_test() {
     printf("__________STEP 9___________________\n");
 
     if (ec_slave[0].state == EC_STATE_OPERATIONAL) {
-        printf("######################################################################################\n");
-        printf("################# All slaves entered into OP state! ##################################\n");
+        printf("Operational state reached for all slaves.\n");
         
-        uint16_t Control_Word = 0x0000;
-        uint8 operation_mode = 10;  // Profile Torque Mode
-        uint16_t max_torque = 200;
-        
-        // 声明PDO结构体变量
-        rxpdo_t rxpdo;
-        txpdo_t txpdo;
+        uint8 operation_mode = 9;  // CSV mode
+        uint16_t Control_Word = 0;
+        int32_t Max_Velocity = 5000;  // 最大速度限制
+        int32_t Max_Acceleration = 5000;  // 最大加速度限制
+        int32_t Quick_Stop_Decel = 10000;  // 快速停止减速度
+        int32_t Profile_Decel = 5000;  // 减速度
         
         for (int i = 1; i <= ec_slavecount; i++) {
-            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE);
-            ec_SDOwrite(i, 0x6072, 0x00, FALSE, sizeof(max_torque), &max_torque, EC_TIMEOUTSAFE);
+            // 先禁用电机
+            Control_Word = 0x0000;
             ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(Control_Word), &Control_Word, EC_TIMEOUTSAFE);
+            osal_usleep(100000);
+
+            // 设置操作模式为CSV
+            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE);
+            osal_usleep(100000);
+
+            // 设置速度相关参数
+            ec_SDOwrite(i, 0x6080, 0x00, FALSE, sizeof(Max_Velocity), &Max_Velocity, EC_TIMEOUTSAFE);
+            ec_SDOwrite(i, 0x60C5, 0x00, FALSE, sizeof(Max_Acceleration), &Max_Acceleration, EC_TIMEOUTSAFE);
+            ec_SDOwrite(i, 0x6085, 0x00, FALSE, sizeof(Quick_Stop_Decel), &Quick_Stop_Decel, EC_TIMEOUTSAFE);
+            ec_SDOwrite(i, 0x6084, 0x00, FALSE, sizeof(Profile_Decel), &Profile_Decel, EC_TIMEOUTSAFE);
+            
+            osal_usleep(100000);
+            
+            // 验证模式是否设置成功
+            uint8 actual_mode;
+            int size = sizeof(actual_mode);
+            if (ec_SDOread(i, 0x6061, 0x00, FALSE, &size, &actual_mode, EC_TIMEOUTSAFE) > 0) {
+                printf("Actual operation mode: %d\n", actual_mode);
+            }
         }
 
-        // 记录开始时间
-        auto start = std::chrono::high_resolution_clock::now();
-        int step = 0;
-
-        // 主循环
-        for(i = 1; i <= 3 * 60 * 60 * 1000; i++) {
-            ec_send_processdata();
-            wkc = ec_receive_processdata(EC_TIMEOUTRET);
-
-            if (step <= 200) {
-                // Initial state
-                rxpdo.controlword = 0x0080;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = operation_mode;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 300) {
-                // Shutdown command
-                rxpdo.controlword = 0x0006;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = operation_mode;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 400) {
-                // Switch On command
-                rxpdo.controlword = 0x0007;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = operation_mode;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 500) {
-                // Enable Operation command
-                rxpdo.controlword = 0x000F;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = operation_mode;
-                rxpdo.padding = 0;
-            }
-            else {
-                // Normal operation with torque control
-                rxpdo.controlword = 0x000F;
-                rxpdo.target_torque = 100;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = operation_mode;
-                rxpdo.padding = 0;
-            }
-
-            // Send output data to each slave
-            for (int slave = 1; slave <= ec_slavecount; slave++) {
-                memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
-            }
-
-            if(wkc >= expectedWKC) {
-                if (i % 100 == 0) {  // Print every 100 cycles
-                    for(int slave = 1; slave <= ec_slavecount; slave++) {
-                        // Get input data using the structure
-                        memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
-                        
-                        // Print received data
-                        printf("Slave %d:\n", slave);
-                        printf("  Status Word: 0x%04x\n", txpdo.statusword);
-                        printf("  Position: %d\n", txpdo.actual_position);
-                        printf("  Velocity: %d\n", txpdo.actual_velocity);
-                        printf("  Torque: %d\n", txpdo.actual_torque);
-                        
-                        // Parse status word
-                        printf("  State: ");
-                        if (txpdo.statusword & 0x0001) printf("Ready to switch on ");
-                        if (txpdo.statusword & 0x0002) printf("Switched on ");
-                        if (txpdo.statusword & 0x0004) printf("Operation enabled ");
-                        if (txpdo.statusword & 0x0008) printf("Fault ");
-                        if (txpdo.statusword & 0x0010) printf("Voltage enabled ");
-                        if (txpdo.statusword & 0x0020) printf("Quick stop ");
-                        if (txpdo.statusword & 0x0040) printf("Switch on disabled ");
-                        if (txpdo.statusword & 0x0080) printf("Warning ");
-                        printf("\n");
-                    }
-                    printf("----------------------------------------\n");
-                }
-                needlf = TRUE;
-            }
-
-            if(step < 900) {
-                step += 1;
-            }
-
-            osal_usleep(1000);
+        while(1) {
+            osal_usleep(100000);
         }
     }
 
@@ -591,55 +555,76 @@ void add_timespec(struct timespec *ts, int64 addtime) {
 OSAL_THREAD_FUNC ecatcheck(void *ptr) {
     int slave; // Variable to hold the current slave index
     (void)ptr; // Not used
+    int consecutive_errors = 0;
+    const int MAX_CONSECUTIVE_ERRORS = 5;
 
-    while (1) { // Infinite loop for monitoring
+    while (1) {
         if (inOP && ((wkc < expectedWKC) || ec_group[currentgroup].docheckstate)) {
             if (needlf) {
-                needlf = FALSE; // Reset line feed flag
-                printf("\n"); // Print a new line
+                needlf = FALSE;
+                printf("\n");
             }
-            ec_group[currentgroup].docheckstate = FALSE; // Reset check state
-            ec_readstate(); // Read the state of all slaves
-            for (slave = 1; slave <= ec_slavecount; slave++) { // Loop through each slave
+            
+            // Increase the consecutive error count
+            if (wkc < expectedWKC) {
+                consecutive_errors++;
+                printf("WARNING: Working counter error (%d/%d), consecutive errors: %d\n", 
+                       wkc, expectedWKC, consecutive_errors);
+            } else {
+                consecutive_errors = 0;
+            }
+
+            // If the consecutive errors exceed the threshold, attempt reinitialization
+            if (consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
+                printf("ERROR: Too many consecutive errors, attempting recovery...\n");
+                ec_group[currentgroup].docheckstate = TRUE;
+                // Reset the error count
+                consecutive_errors = 0;
+            }
+
+            ec_group[currentgroup].docheckstate = FALSE;
+            ec_readstate();
+            for (slave = 1; slave <= ec_slavecount; slave++) {
                 if ((ec_slave[slave].group == currentgroup) && (ec_slave[slave].state != EC_STATE_OPERATIONAL)) {
-                    ec_group[currentgroup].docheckstate = TRUE; // Set check state if slave is not operational
+                    ec_group[currentgroup].docheckstate = TRUE;
                     if (ec_slave[slave].state == (EC_STATE_SAFE_OP + EC_STATE_ERROR)) {
                         printf("ERROR: Slave %d is in SAFE_OP + ERROR, attempting ack.\n", slave);
-                        ec_slave[slave].state = (EC_STATE_SAFE_OP + EC_STATE_ACK); // Acknowledge error state
-                        ec_writestate(slave); // Write the state change to the slave
+                        ec_slave[slave].state = (EC_STATE_SAFE_OP + EC_STATE_ACK);
+                        ec_writestate(slave);
                     } else if (ec_slave[slave].state == EC_STATE_SAFE_OP) {
                         printf("WARNING: Slave %d is in SAFE_OP, changing to OPERATIONAL.\n", slave);
-                        ec_slave[slave].state = EC_STATE_OPERATIONAL; // Change state to operational
-                        ec_writestate(slave); // Write the state change to the slave
+                        ec_slave[slave].state = EC_STATE_OPERATIONAL;
+                        ec_writestate(slave);
                     } else if (ec_slave[slave].state > EC_STATE_NONE) {
-                        if (ec_reconfig_slave(slave, EC_TIMEOUTMON)) { // Reconfigure the slave if needed
-                            ec_slave[slave].islost = FALSE; // Mark slave as found
+                        if (ec_reconfig_slave(slave, EC_TIMEOUTMON)) {
+                            ec_slave[slave].islost = FALSE;
                             printf("MESSAGE: Slave %d reconfigured\n", slave);
                         }
                     } else if (!ec_slave[slave].islost) {
-                        ec_statecheck(slave, EC_STATE_OPERATIONAL,  EC_TIMEOUTRET); // Check the state of the slave
-                        if (ec_slave[slave].state == EC_STATE_NONE) {
-                            ec_slave[slave].islost = TRUE; // Mark slave as lost
+                        ec_statecheck(slave, EC_STATE_OPERATIONAL, EC_TIMEOUTRET);
+                        if (!ec_slave[slave].state) {
+                            ec_slave[slave].islost = TRUE;
                             printf("ERROR: Slave %d lost\n", slave);
                         }
                     }
                 }
-                if (ec_slave[slave].islost) { // If the slave is marked as lost
-                    if (ec_slave[slave].state == EC_STATE_NONE) {
-                        if (ec_recover_slave(slave, EC_TIMEOUTMON)) { // Attempt to recover the lost slave
-                            ec_slave[slave].islost = FALSE; // Mark slave as found
+                if (ec_slave[slave].islost) {
+                    if (!ec_slave[slave].state) {
+                        if (ec_recover_slave(slave, EC_TIMEOUTMON)) {
+                            ec_slave[slave].islost = FALSE;
                             printf("MESSAGE: Slave %d recovered\n", slave);
                         }
                     } else {
-                        ec_slave[slave].islost = FALSE; // Mark slave as found
+                        ec_slave[slave].islost = FALSE;
                         printf("MESSAGE: Slave %d found\n", slave);
                     }
                 }
             }
             if (!ec_group[currentgroup].docheckstate) {
-                printf("OK: All slaves resumed OPERATIONAL.\n"); // Confirm all slaves are operational
+                printf("OK: All slaves resumed OPERATIONAL.\n");
             }
         }
+        osal_usleep(10000); 
     }
 }
 
@@ -651,41 +636,134 @@ OSAL_THREAD_FUNC ecatcheck(void *ptr) {
  * the specified cycle time.
  */
 OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
-    struct timespec ts, tleft; // Variables for time management
-    int ht; // Variable for high-resolution time
-    int64 cycletime; // Variable to hold the cycle time
-    struct timeval tp; // Variable for time value
+    struct timespec ts, tleft;
+    int ht;
+    int64 cycletime;
+    int missed_cycles = 0;
+    const int MAX_MISSED_CYCLES = 10;
+    struct timespec cycle_start, cycle_end;
+    long cycle_time_ns;
 
-    // Get the current time in monotonic clock
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    ht = (ts.tv_nsec / 1000000) + 1; /* Round to nearest ms */
-    ts.tv_nsec = ht * 1000000; // Set nanoseconds to the rounded value
-    if (ts.tv_nsec >= NSEC_PER_SEC) { // If nanoseconds exceed 1 second
-        ts.tv_sec++; // Increment seconds
-        ts.tv_nsec -= NSEC_PER_SEC; // Adjust nanoseconds
+    ht = (ts.tv_nsec / 1000000) + 1;
+    ts.tv_nsec = ht * 1000000;
+    if (ts.tv_nsec >= NSEC_PER_SEC) {
+        ts.tv_sec++;
+        ts.tv_nsec -= NSEC_PER_SEC;
     }
-    cycletime = *(int *)ptr * 1000; /* Convert cycle time from ms to ns */
+    cycletime = *(int *)ptr * 1000;
 
-    toff = 0; // Initialize time offset
-    dorun = 0; // Initialize run flag
-    ec_send_processdata(); // Send initial process data
+    toff = 0;
+    dorun = 0;
+    
+    // 初始化PDO数据
+    rxpdo.controlword = 0x0080;
+    rxpdo.target_velocity = 0;
+    rxpdo.mode_of_operation = 9;  // CSV mode (9)
+    rxpdo.padding = 0;
+    
+    // 发送初始数据
+    for (int slave = 1; slave <= ec_slavecount; slave++) {
+        memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+    }
+    ec_send_processdata();
+    wkc = ec_receive_processdata(EC_TIMEOUTRET);  // 确保第一次通信成功
 
-    while (1) { // Infinite loop for real-time processing
-        dorun++; // Increment run counter
-        /* Calculate next cycle start */
-        add_timespec(&ts, cycletime + toff); // Add cycle time to the current time
-        /* Wait for the cycle start */
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft); // Sleep until the next cycle
+    int step = 0;
+    int retry_count = 0;
+    const int MAX_RETRY = 3;
 
-        if (start_ecatthread_thread) { // Check if the EtherCAT thread should run
-            wkc = ec_receive_processdata(EC_TIMEOUTRET); // Receive process data and store the Work Counter
+    while (1) {
+        clock_gettime(CLOCK_MONOTONIC, &cycle_start);
+        
+        add_timespec(&ts, cycletime + toff);
+        if (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft) != 0) {
+            missed_cycles++;
+            if (missed_cycles >= MAX_MISSED_CYCLES) {
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                ts.tv_nsec = ((ts.tv_nsec / 1000000) + 1) * 1000000;
+                if (ts.tv_nsec >= NSEC_PER_SEC) {
+                    ts.tv_sec++;
+                    ts.tv_nsec -= NSEC_PER_SEC;
+                }
+                missed_cycles = 0;
+            }
+        } else {
+            missed_cycles = 0;
+        }
+        
+        dorun++;
 
-            if (ec_slave[0].hasdc) { // If the first slave supports Distributed Clock
-                /* Calculate toff to synchronize Linux time with DC time */
-                ec_sync(ec_DCtime, cycletime, &toff); // Synchronize time
+        if (start_ecatthread_thread) {
+            // Receive process data
+            wkc = ec_receive_processdata(EC_TIMEOUTRET);
+
+            if (wkc >= expectedWKC) {
+                retry_count = 0;  // Reset retry counter
+                
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
+                }
+
+                // State machine control
+                if (step <= 1000) {
+                    rxpdo.controlword = 0x0080;
+                    rxpdo.target_velocity = 0;
+                } else if (step <= 1300) {
+                    rxpdo.controlword = 0x0006;
+                    rxpdo.target_velocity = 0;
+                } else if (step <= 1600) {
+                    rxpdo.controlword = 0x0007;
+                    rxpdo.target_velocity = 0;
+                } else if (step <= 2000) {
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_velocity = 0;
+                } else {
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_velocity = 10000;  // Set target velocity to 1000 counts/s
+                }
+                rxpdo.mode_of_operation = 9;  // CSV mode
+
+                // Send data to slaves
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+                }
+
+                if (dorun % 100 == 0) {
+                    printf("Status: SW=0x%04x, pos=%d, vel=%d, target_vel=%d, mode=%d\n",
+                           txpdo.statusword,
+                           txpdo.actual_position, txpdo.actual_velocity,
+                           rxpdo.target_velocity, rxpdo.mode_of_operation);
+                }
+
+                if (step < 8000) {
+                    step++;
+                }
+            } else {
+                retry_count++;
+                if (retry_count >= MAX_RETRY) {
+                    printf("ERROR: Communication failure after %d retries\n", retry_count);
+                    retry_count = 0;
+                }
             }
 
-            ec_send_processdata(); // Send process data to the slaves
+            // clock synchronization
+            if (ec_slave[0].hasdc) {
+                ec_sync(ec_DCtime, cycletime, &toff);
+            }
+
+            // send process data
+            ec_send_processdata();
+        }
+
+        // monitor cycle time
+        clock_gettime(CLOCK_MONOTONIC, &cycle_end);
+        cycle_time_ns = (cycle_end.tv_sec - cycle_start.tv_sec) * NSEC_PER_SEC +
+                       (cycle_end.tv_nsec - cycle_start.tv_nsec);
+        
+        if (cycle_time_ns > cycletime * 1.5) {
+            printf("WARNING: Cycle time exceeded: %ld ns (expected: %ld ns)\n", 
+                   cycle_time_ns, cycletime);
         }
     }
 }
@@ -696,29 +774,40 @@ int test_count_sum = 100;
 int test_count = 0;
 float correct_rate = 0;
 
+// Main function
 int main(int argc, char **argv) {
     needlf = FALSE;
     inOP = FALSE;
     start_ecatthread_thread = FALSE;
     dorun = 0;
-    ctime_thread = 1000; // 1ms cycle time
 
+    ctime_thread = 500;  // Communication period
+
+    // Set the highest real-time priority
+    struct sched_param param;
+    param.sched_priority = 99;
+    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
+        perror("sched_setscheduler failed");
+    }
+
+    // Lock memory
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
+        perror("mlockall failed");
+    }
+
+    // Set CPU affinity to two cores
     cpu_set_t cpuset;
-    CPU_ZERO(&cpuset); // Clear the CPU set
-    CPU_SET(3, &cpuset); // Set CPU 0 (change this to a valid core number)
+    CPU_ZERO(&cpuset);
+    CPU_SET(2, &cpuset);  // Use CPU core 2
+    CPU_SET(3, &cpuset);  // Use CPU core 3
 
-    // Set the CPU affinity for the current process
     if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == -1) {
         perror("sched_setaffinity");
         return EXIT_FAILURE;
     }
 
-    // Your program logic here
-    printf("Running on CPU core 0\n");
-
+    printf("Running on CPU cores 2 and 3\n");
     erob_test();
-
-
     printf("End program\n");
 
     return EXIT_SUCCESS;

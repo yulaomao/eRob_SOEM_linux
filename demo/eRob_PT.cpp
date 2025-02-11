@@ -15,6 +15,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/mman.h>  // 添加此头文件用于mlockall
 
 #include <sys/time.h>
 #include <pthread.h>
@@ -41,6 +42,7 @@ bool start_ecatthread_thread; // Flag to start the EtherCAT thread
 int ctime_thread; // Cycle time for the EtherCAT thread
 
 int64 toff, gl_delta; // Time offset and global delta for synchronization
+
 
 // Function prototypes for EtherCAT thread functions
 OSAL_THREAD_FUNC ecatcheck(void *ptr); // Function to check the state of EtherCAT slaves
@@ -82,6 +84,9 @@ typedef struct {
     int16_t actual_torque;    // 0x6077:0, 16 bits
 } __attribute__((__packed__)) txpdo_t;
 
+rxpdo_t rxpdo;
+txpdo_t txpdo;
+int step = 0;
 //##################################################################################################
 // Function: Set the CPU affinity for a thread
 void set_thread_affinity(pthread_t thread, int cpu_core) {
@@ -420,111 +425,17 @@ int erob_test() {
         
         uint16_t Control_Word = 0x0000;
         uint8 operation_mode = 4;  // Profile Torque Mode
-        uint16_t max_torque = 200;
+        uint16_t max_torque = 100;
         
-        // 声明PDO结构体变量
-        rxpdo_t rxpdo;
-        txpdo_t txpdo;
+
         
         for (int i = 1; i <= ec_slavecount; i++) {
             ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE);
             ec_SDOwrite(i, 0x6072, 0x00, FALSE, sizeof(max_torque), &max_torque, EC_TIMEOUTSAFE);
             ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(Control_Word), &Control_Word, EC_TIMEOUTSAFE);
         }
-
-        // 记录开始时间
-        auto start = std::chrono::high_resolution_clock::now();
-        int step = 0;
-
         // 主循环
         for(i = 1; i <= 3 * 60 * 60 * 1000; i++) {
-            ec_send_processdata();
-            wkc = ec_receive_processdata(EC_TIMEOUTRET);
-
-            if (step <= 200) {
-                // Initial state
-                rxpdo.controlword = 0x0080;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 300) {
-                // Shutdown command
-                rxpdo.controlword = 0x0006;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 400) {
-                // Switch On command
-                rxpdo.controlword = 0x0007;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 500) {
-                // Enable Operation command
-                rxpdo.controlword = 0x000F;
-                rxpdo.target_torque = 0;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-            else {
-                // Normal operation with torque control
-                rxpdo.controlword = 0x000F;
-                rxpdo.target_torque = 100;
-                rxpdo.torque_slope = 1000;
-                rxpdo.max_torque = 200;
-                rxpdo.mode_of_operation = 4;
-                rxpdo.padding = 0;
-            }
-
-            // Send output data to each slave
-            for (int slave = 1; slave <= ec_slavecount; slave++) {
-                memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
-            }
-
-            if(wkc >= expectedWKC) {
-                if (i % 100 == 0) {  // Print every 100 cycles
-                    for(int slave = 1; slave <= ec_slavecount; slave++) {
-                        // Get input data using the structure
-                        memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
-                        
-                        // Print received data
-                        printf("Slave %d:\n", slave);
-                        printf("  Status Word: 0x%04x\n", txpdo.statusword);
-                        printf("  Position: %d\n", txpdo.actual_position);
-                        printf("  Velocity: %d\n", txpdo.actual_velocity);
-                        printf("  Torque: %d\n", txpdo.actual_torque);
-                        
-                        // Parse status word
-                        printf("  State: ");
-                        if (txpdo.statusword & 0x0001) printf("Ready to switch on ");
-                        if (txpdo.statusword & 0x0002) printf("Switched on ");
-                        if (txpdo.statusword & 0x0004) printf("Operation enabled ");
-                        if (txpdo.statusword & 0x0008) printf("Fault ");
-                        if (txpdo.statusword & 0x0010) printf("Voltage enabled ");
-                        if (txpdo.statusword & 0x0020) printf("Quick stop ");
-                        if (txpdo.statusword & 0x0040) printf("Switch on disabled ");
-                        if (txpdo.statusword & 0x0080) printf("Warning ");
-                        printf("\n");
-                    }
-                    printf("----------------------------------------\n");
-                }
-                needlf = TRUE;
-            }
-
-            if(step < 900) {
-                step += 1;
-            }
 
             osal_usleep(1000);
         }
@@ -678,14 +589,68 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft); // Sleep until the next cycle
 
         if (start_ecatthread_thread) { // Check if the EtherCAT thread should run
-            wkc = ec_receive_processdata(EC_TIMEOUTRET); // Receive process data and store the Work Counter
+            // 接收过程数据
+            wkc = ec_receive_processdata(EC_TIMEOUTRET);
 
-            if (ec_slave[0].hasdc) { // If the first slave supports Distributed Clock
-                /* Calculate toff to synchronize Linux time with DC time */
-                ec_sync(ec_DCtime, cycletime, &toff); // Synchronize time
+            if (wkc >= expectedWKC) {
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
+                    
+                    // 检查从站状态
+                    if (ec_slave[slave].state != EC_STATE_OPERATIONAL) {
+                        printf("Warning: Slave %d not in OPERATIONAL state (State: 0x%02x)\n", 
+                               slave, ec_slave[slave].state);
+                        ec_slave[slave].state = EC_STATE_OPERATIONAL;
+                        ec_writestate(slave);
+                    }
+                }
+
+                // 状态机控制
+                if (step <= 2000) {
+                    rxpdo.controlword = 0x0080;
+                    rxpdo.target_torque = 0;
+                } else if (step <= 2300) {
+                    rxpdo.controlword = 0x0006;
+                    rxpdo.target_torque = 0;
+                } else if (step <= 2600) {
+                    rxpdo.controlword = 0x0007;
+                    rxpdo.target_torque = 0;
+                } else if (step <= 3000) {
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_torque = 0;
+                } else {
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_torque = 50;
+                }
+                rxpdo.torque_slope = 100;
+                rxpdo.max_torque = 100;
+                rxpdo.mode_of_operation = 4;
+                rxpdo.padding = 0;
+
+                // 发送数据到从站
+                for (int slave = 1; slave <= ec_slavecount; slave++) {
+                    memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+                }
+
+                if (dorun % 100 == 0) {
+                    printf("Status: SW=0x%04x, pos=%d, vel=%d, torque=%d, target_torque=%d\n",
+                           txpdo.statusword,
+                           txpdo.actual_position, txpdo.actual_velocity,
+                           txpdo.actual_torque, rxpdo.target_torque);
+                }
+
+                if (step < 8000) {
+                    step++;
+                }
+            } 
+
+            // 时钟同步
+            if (ec_slave[0].hasdc) {
+                ec_sync(ec_DCtime, cycletime, &toff);
             }
 
-            ec_send_processdata(); // Send process data to the slaves
+            // 发送过程数据
+            ec_send_processdata();
         }
     }
 }
@@ -701,24 +666,33 @@ int main(int argc, char **argv) {
     inOP = FALSE;
     start_ecatthread_thread = FALSE;
     dorun = 0;
-    ctime_thread = 1000; // 1ms cycle time
+    ctime_thread = 500;  // 设置周期时间为500us
 
+    // 设置最高实时优先级
+    struct sched_param param;
+    param.sched_priority = 99;
+    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
+        perror("sched_setscheduler failed");
+    }
+
+    // 锁定内存
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
+        perror("mlockall failed");
+    }
+
+    // 设置CPU亲和性到两个核心
     cpu_set_t cpuset;
-    CPU_ZERO(&cpuset); // Clear the CPU set
-    CPU_SET(3, &cpuset); // Set CPU 0 (change this to a valid core number)
+    CPU_ZERO(&cpuset);
+    CPU_SET(2, &cpuset);  // 使用CPU核心2
+    CPU_SET(3, &cpuset);  // 使用CPU核心3
 
-    // Set the CPU affinity for the current process
     if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) == -1) {
         perror("sched_setaffinity");
         return EXIT_FAILURE;
     }
 
-    // Your program logic here
-    printf("Running on CPU core 0\n");
-
+    printf("Running on CPU cores 2 and 3\n");
     erob_test();
-
-
     printf("End program\n");
 
     return EXIT_SUCCESS;
