@@ -707,16 +707,16 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
                 }
 
                 // State machine control
-                if (step <= 1000) {
+                if (step <= 4000) {
                     rxpdo.controlword = 0x0080;
                     rxpdo.target_torque = 0;
-                } else if (step <= 1300) {
+                } else if (step <= 5300) {
                     rxpdo.controlword = 0x0006;
                     rxpdo.target_torque = 0;
-                } else if (step <= 1600) {
+                } else if (step <= 6000) {
                     rxpdo.controlword = 0x0007;
                     rxpdo.target_torque = 0;
-                } else if (step <= 2000) {
+                } else if (step <= 7000) {
                     rxpdo.controlword = 0x000F;
                     rxpdo.target_torque = 0;
                 } else {
