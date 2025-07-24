@@ -312,7 +312,7 @@ int erob_test() {
         printf("Slave %d: Type %d, Address 0x%02x, State Machine actual %d, required %d\n", 
                i, ec_slave[i].eep_id, ec_slave[i].configadr, ec_slave[i].state, EC_STATE_INIT);
         printf("___________________________________________\n");
-        ecx_dcsync0(&ecx_context, i, TRUE, 500000, 0);  //Synchronize the distributed clock for the slave
+        ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);  //Synchronize the distributed clock for the slave
     }
 
     // Map the configured PDOs to the IOmap
@@ -706,21 +706,21 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
                 }
 
                 // State machine control
-                if (step <= 1000) {
+                if (step <= 1500) {
                     rxpdo.controlword = 0x0080;
                     rxpdo.target_velocity = 0;
-                } else if (step <= 1300) {
+                } else if (step <= 1800) {
                     rxpdo.controlword = 0x0006;
                     rxpdo.target_velocity = 0;
-                } else if (step <= 1600) {
+                } else if (step <= 2000) {
                     rxpdo.controlword = 0x0007;
                     rxpdo.target_velocity = 0;
-                } else if (step <= 2000) {
+                } else if (step <= 2400) {
                     rxpdo.controlword = 0x000F;
                     rxpdo.target_velocity = 0;
                 } else {
                     rxpdo.controlword = 0x000F;
-                    rxpdo.target_velocity = 10000;  // Set target velocity to 1000 counts/s
+                    rxpdo.target_velocity = 5000;  // Set target velocity to 1000 counts/s
                 }
                 rxpdo.mode_of_operation = 9;  // CSV mode
 
@@ -781,7 +781,7 @@ int main(int argc, char **argv) {
     start_ecatthread_thread = FALSE;
     dorun = 0;
 
-    ctime_thread = 500;  // Communication period
+    ctime_thread = 1000;  // Communication period
 
     // Set the highest real-time priority
     struct sched_param param;
