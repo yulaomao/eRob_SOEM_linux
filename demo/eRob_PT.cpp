@@ -666,7 +666,7 @@ int main(int argc, char **argv) {
     inOP = FALSE;
     start_ecatthread_thread = FALSE;
     dorun = 0;
-    ctime_thread = 500;  // 设置周期时间为500us
+    ctime_thread = 1000;  // 设置周期时间为500us
 
     // 设置最高实时优先级
     struct sched_param param;
