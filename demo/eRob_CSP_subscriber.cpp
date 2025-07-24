@@ -356,7 +356,7 @@ int erob_test() {
         printf("Slave %d: Type %d, Address 0x%02x, State Machine actual %d, required %d\n", 
                i, ec_slave[i].eep_id, ec_slave[i].configadr, ec_slave[i].state, EC_STATE_INIT);
         printf("___________________________________________\n");
-        ecx_dcsync0(&ecx_context, i, TRUE, 500000, 0);  //Synchronize the distributed clock for the slave
+        ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);  //Synchronize the distributed clock for the slave
     }
 
     // Map the configured PDOs to the IOmap
@@ -717,16 +717,16 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
                 pthread_mutex_unlock(&target_mutex);
 
                 // State machine control
-                if (step <= 400) {
+                if (step <= 1000) {
                     rxpdo.controlword = 0x0080;
                     rxpdo.target_position = 0;
-                } else if (step <= 600) {
+                } else if (step <= 1600) {
                     rxpdo.controlword = 0x0006;
                     rxpdo.target_position = txpdo.actual_position;
-                } else if (step <= 800) {
+                } else if (step <= 2000) {
                     rxpdo.controlword = 0x0007;
                     rxpdo.target_position = txpdo.actual_position;
-                } else if (step <= 1000) {
+                } else if (step <= 2400) {
                     rxpdo.controlword = 0x000F;
                     rxpdo.target_position = txpdo.actual_position;
                 } else {
@@ -963,7 +963,7 @@ int main(int argc, char **argv) {
     inOP = FALSE;
     start_ecatthread_thread = FALSE;
     dorun = 0;
-    ctime_thread = 500; // 1ms cycle time
+    ctime_thread = 1000; // 1ms cycle time
 
     // Set a higher real-time priority
     struct sched_param param;
