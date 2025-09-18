@@ -1,0 +1,1 @@
+/usr/bin/cc  -Wall -Wextra -Werror -Wl,--dependency-file=CMakeFiles/slaveinfo.dir/link.d CMakeFiles/slaveinfo.dir/slaveinfo.c.o -o slaveinfo  -Wl,-rpath,/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/build: ../../../libsoem.so -lpthread -lrt

@@ -1,0 +1,1 @@
+/usr/bin/cc  -Wall -Wextra -Werror -Wl,--dependency-file=CMakeFiles/eepromtool.dir/link.d CMakeFiles/eepromtool.dir/eepromtool.c.o -o eepromtool  -Wl,-rpath,/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/build: ../../../libsoem.so -lpthread -lrt
