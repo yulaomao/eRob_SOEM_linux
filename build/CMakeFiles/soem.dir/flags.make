@@ -4,7 +4,7 @@
 # compile C with /usr/bin/cc
 C_DEFINES = -Dsoem_EXPORTS
 
-C_INCLUDES = -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/soem -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/osal -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/osal/linux -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/oshw/linux
+C_INCLUDES = -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/soem -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/osal -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/osal/linux -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/oshw/linux -I/home/runner/work/eRob_SOEM_linux/eRob_SOEM_linux/include
 
 C_FLAGS =  -Wall -Wextra -Werror -fPIC
 

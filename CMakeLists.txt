@@ -3,7 +3,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake/Modu
 project(SOEM
     DESCRIPTION "Simple Open EtherCAT Master"
     VERSION 1.4.0
-    LANGUAGES C
+    LANGUAGES C CXX
 )
 
 if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)   # Default to installing in SOEM source directory
@@ -113,9 +113,45 @@ install(FILES
 )
 
 if(BUILD_TESTS)
+    find_package(Threads REQUIRED)
+    
     add_subdirectory(test/simple_ng)
     add_subdirectory(test/linux/slaveinfo)
     add_subdirectory(test/linux/eepromtool)
     add_subdirectory(test/linux/simple_test)
     add_subdirectory(demo)
+    
+    # Add ERob Motor Controller library
+    include_directories(include)
+    
+    # Set C++ standard
+    set(CMAKE_CXX_STANDARD 14)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    
+    # Source files for the motor controller library
+    set(EROB_CONTROLLER_SOURCES
+        src/ERobMotorController.cpp
+        src/ERobMotorController_Private.cpp
+    )
+    
+    # Create the motor controller library
+    add_library(ERobMotorController SHARED ${EROB_CONTROLLER_SOURCES})
+    target_link_libraries(ERobMotorController soem pthread)
+    target_compile_options(ERobMotorController PRIVATE -Wall -Wextra)
+    
+    # Install library and headers
+    install(TARGETS ERobMotorController 
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+    )
+    install(FILES include/ERobMotorController.hpp DESTINATION include)
+    
+    # Add example executables
+    add_executable(three_axis_example examples/ERobThreeAxisExample.cpp)
+    target_link_libraries(three_axis_example ERobMotorController soem pthread)
+    install(TARGETS three_axis_example DESTINATION bin)
+    
+    add_executable(controller_test examples/controller_test.cpp)
+    target_link_libraries(controller_test ERobMotorController soem pthread)
+    install(TARGETS controller_test DESTINATION bin)
 endif()

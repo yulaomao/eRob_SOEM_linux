@@ -1,0 +1,59 @@
+cmake_minimum_required(VERSION 3.10)
+
+project(ERobMotorController LANGUAGES CXX)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find required packages
+find_package(Threads REQUIRED)
+
+# Include directories
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/soem
+    ${CMAKE_CURRENT_SOURCE_DIR}/osal
+    ${CMAKE_CURRENT_SOURCE_DIR}/osal/linux
+    ${CMAKE_CURRENT_SOURCE_DIR}/oshw/linux
+)
+
+# Source files for the motor controller library
+set(EROB_CONTROLLER_SOURCES
+    src/ERobMotorController.cpp
+    src/ERobMotorController_Private.cpp
+)
+
+# Create the motor controller library
+add_library(ERobMotorController SHARED ${EROB_CONTROLLER_SOURCES})
+
+# Link with SOEM library and threads
+target_link_libraries(ERobMotorController soem Threads::Threads)
+
+# Set compile flags
+target_compile_options(ERobMotorController PRIVATE -Wall -Wextra)
+
+# Install library and headers
+install(TARGETS ERobMotorController 
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+)
+
+install(FILES include/ERobMotorController.hpp 
+    DESTINATION include
+)
+
+# Build examples if this is the main project
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    # Add example executable
+    add_executable(three_axis_example examples/ERobThreeAxisExample.cpp)
+    target_link_libraries(three_axis_example ERobMotorController soem Threads::Threads)
+    
+    # Install example
+    install(TARGETS three_axis_example DESTINATION bin)
+endif()
+
+# Create a simple test/demo executable that doesn't require hardware
+add_executable(controller_test examples/controller_test.cpp)
+target_link_libraries(controller_test ERobMotorController soem Threads::Threads)
+install(TARGETS controller_test DESTINATION bin)

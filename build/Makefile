@@ -175,6 +175,45 @@ soem/fast:
 .PHONY : soem/fast
 
 #=============================================================================
+# Target rules for targets named ERobMotorController
+
+# Build rule for target.
+ERobMotorController: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 ERobMotorController
+.PHONY : ERobMotorController
+
+# fast build rule for target.
+ERobMotorController/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/ERobMotorController.dir/build.make CMakeFiles/ERobMotorController.dir/build
+.PHONY : ERobMotorController/fast
+
+#=============================================================================
+# Target rules for targets named three_axis_example
+
+# Build rule for target.
+three_axis_example: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 three_axis_example
+.PHONY : three_axis_example
+
+# fast build rule for target.
+three_axis_example/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/three_axis_example.dir/build.make CMakeFiles/three_axis_example.dir/build
+.PHONY : three_axis_example/fast
+
+#=============================================================================
+# Target rules for targets named controller_test
+
+# Build rule for target.
+controller_test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 controller_test
+.PHONY : controller_test
+
+# fast build rule for target.
+controller_test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/controller_test.dir/build.make CMakeFiles/controller_test.dir/build
+.PHONY : controller_test/fast
+
+#=============================================================================
 # Target rules for targets named simple_ng
 
 # Build rule for target.
@@ -329,6 +368,54 @@ eRob_CSP: cmake_check_build_system
 eRob_CSP/fast:
 	$(MAKE) $(MAKESILENT) -f demo/CMakeFiles/eRob_CSP.dir/build.make demo/CMakeFiles/eRob_CSP.dir/build
 .PHONY : eRob_CSP/fast
+
+examples/ERobThreeAxisExample.o: examples/ERobThreeAxisExample.cpp.o
+.PHONY : examples/ERobThreeAxisExample.o
+
+# target to build an object file
+examples/ERobThreeAxisExample.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/three_axis_example.dir/build.make CMakeFiles/three_axis_example.dir/examples/ERobThreeAxisExample.cpp.o
+.PHONY : examples/ERobThreeAxisExample.cpp.o
+
+examples/ERobThreeAxisExample.i: examples/ERobThreeAxisExample.cpp.i
+.PHONY : examples/ERobThreeAxisExample.i
+
+# target to preprocess a source file
+examples/ERobThreeAxisExample.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/three_axis_example.dir/build.make CMakeFiles/three_axis_example.dir/examples/ERobThreeAxisExample.cpp.i
+.PHONY : examples/ERobThreeAxisExample.cpp.i
+
+examples/ERobThreeAxisExample.s: examples/ERobThreeAxisExample.cpp.s
+.PHONY : examples/ERobThreeAxisExample.s
+
+# target to generate assembly for a file
+examples/ERobThreeAxisExample.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/three_axis_example.dir/build.make CMakeFiles/three_axis_example.dir/examples/ERobThreeAxisExample.cpp.s
+.PHONY : examples/ERobThreeAxisExample.cpp.s
+
+examples/controller_test.o: examples/controller_test.cpp.o
+.PHONY : examples/controller_test.o
+
+# target to build an object file
+examples/controller_test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/controller_test.dir/build.make CMakeFiles/controller_test.dir/examples/controller_test.cpp.o
+.PHONY : examples/controller_test.cpp.o
+
+examples/controller_test.i: examples/controller_test.cpp.i
+.PHONY : examples/controller_test.i
+
+# target to preprocess a source file
+examples/controller_test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/controller_test.dir/build.make CMakeFiles/controller_test.dir/examples/controller_test.cpp.i
+.PHONY : examples/controller_test.cpp.i
+
+examples/controller_test.s: examples/controller_test.cpp.s
+.PHONY : examples/controller_test.s
+
+# target to generate assembly for a file
+examples/controller_test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/controller_test.dir/build.make CMakeFiles/controller_test.dir/examples/controller_test.cpp.s
+.PHONY : examples/controller_test.cpp.s
 
 osal/linux/osal.o: osal/linux/osal.c.o
 .PHONY : osal/linux/osal.o
@@ -618,6 +705,54 @@ soem/ethercatsoe.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/soem.dir/build.make CMakeFiles/soem.dir/soem/ethercatsoe.c.s
 .PHONY : soem/ethercatsoe.c.s
 
+src/ERobMotorController.o: src/ERobMotorController.cpp.o
+.PHONY : src/ERobMotorController.o
+
+# target to build an object file
+src/ERobMotorController.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/ERobMotorController.dir/build.make CMakeFiles/ERobMotorController.dir/src/ERobMotorController.cpp.o
+.PHONY : src/ERobMotorController.cpp.o
+
+src/ERobMotorController.i: src/ERobMotorController.cpp.i
+.PHONY : src/ERobMotorController.i
+
+# target to preprocess a source file
+src/ERobMotorController.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/ERobMotorController.dir/build.make CMakeFiles/ERobMotorController.dir/src/ERobMotorController.cpp.i
+.PHONY : src/ERobMotorController.cpp.i
+
+src/ERobMotorController.s: src/ERobMotorController.cpp.s
+.PHONY : src/ERobMotorController.s
+
+# target to generate assembly for a file
+src/ERobMotorController.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/ERobMotorController.dir/build.make CMakeFiles/ERobMotorController.dir/src/ERobMotorController.cpp.s
+.PHONY : src/ERobMotorController.cpp.s
+
+src/ERobMotorController_Private.o: src/ERobMotorController_Private.cpp.o
+.PHONY : src/ERobMotorController_Private.o
+
+# target to build an object file
+src/ERobMotorController_Private.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/ERobMotorController.dir/build.make CMakeFiles/ERobMotorController.dir/src/ERobMotorController_Private.cpp.o
+.PHONY : src/ERobMotorController_Private.cpp.o
+
+src/ERobMotorController_Private.i: src/ERobMotorController_Private.cpp.i
+.PHONY : src/ERobMotorController_Private.i
+
+# target to preprocess a source file
+src/ERobMotorController_Private.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/ERobMotorController.dir/build.make CMakeFiles/ERobMotorController.dir/src/ERobMotorController_Private.cpp.i
+.PHONY : src/ERobMotorController_Private.cpp.i
+
+src/ERobMotorController_Private.s: src/ERobMotorController_Private.cpp.s
+.PHONY : src/ERobMotorController_Private.s
+
+# target to generate assembly for a file
+src/ERobMotorController_Private.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/ERobMotorController.dir/build.make CMakeFiles/ERobMotorController.dir/src/ERobMotorController_Private.cpp.s
+.PHONY : src/ERobMotorController_Private.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -630,6 +765,8 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... ERobMotorController"
+	@echo "... controller_test"
 	@echo "... eRob_CSP"
 	@echo "... eRob_CSP_subscriber"
 	@echo "... eRob_CST"
@@ -643,6 +780,13 @@ help:
 	@echo "... simple_test"
 	@echo "... slaveinfo"
 	@echo "... soem"
+	@echo "... three_axis_example"
+	@echo "... examples/ERobThreeAxisExample.o"
+	@echo "... examples/ERobThreeAxisExample.i"
+	@echo "... examples/ERobThreeAxisExample.s"
+	@echo "... examples/controller_test.o"
+	@echo "... examples/controller_test.i"
+	@echo "... examples/controller_test.s"
 	@echo "... osal/linux/osal.o"
 	@echo "... osal/linux/osal.i"
 	@echo "... osal/linux/osal.s"
@@ -679,6 +823,12 @@ help:
 	@echo "... soem/ethercatsoe.o"
 	@echo "... soem/ethercatsoe.i"
 	@echo "... soem/ethercatsoe.s"
+	@echo "... src/ERobMotorController.o"
+	@echo "... src/ERobMotorController.i"
+	@echo "... src/ERobMotorController.s"
+	@echo "... src/ERobMotorController_Private.o"
+	@echo "... src/ERobMotorController_Private.i"
+	@echo "... src/ERobMotorController_Private.s"
 .PHONY : help
 
 
