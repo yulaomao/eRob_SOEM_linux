@@ -34,6 +34,7 @@ if(WIN32)
 elseif(UNIX AND NOT APPLE)
     set(OS "linux")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -std=c++11")
     set(OS_LIBS pthread rt)
 elseif(APPLE) 
     # This must come *before* linux or MacOSX will identify as Unix.
@@ -112,46 +113,50 @@ install(FILES
     DESTINATION ${SOEM_INCLUDE_INSTALL_DIR}
 )
 
+# Add ERobMotorController library
+add_library(ERobMotorController SHARED
+    ERobMotorController.cpp
+)
+
+# Set C++11 standard for ERobMotorController
+set_target_properties(ERobMotorController PROPERTIES
+    CXX_STANDARD 11
+    CXX_STANDARD_REQUIRED ON
+)
+
+target_link_libraries(ERobMotorController soem pthread)
+
+target_include_directories(ERobMotorController PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:include>
+)
+
+# Add motor controller example
+add_executable(motor_controller_example
+    motor_controller_example.cpp
+)
+
+# Set C++11 standard for example
+set_target_properties(motor_controller_example PROPERTIES
+    CXX_STANDARD 11
+    CXX_STANDARD_REQUIRED ON
+)
+
+target_link_libraries(motor_controller_example ERobMotorController soem pthread)
+
+# Install ERobMotorController
+install(TARGETS ERobMotorController EXPORT ERobMotorControllerConfig 
+    DESTINATION ${SOEM_LIB_INSTALL_DIR})
+install(FILES ERobMotorController.h DESTINATION ${SOEM_INCLUDE_INSTALL_DIR})
+install(EXPORT ERobMotorControllerConfig DESTINATION share/ERobMotorController/cmake)
+
+# Install example
+install(TARGETS motor_controller_example DESTINATION bin)
+
 if(BUILD_TESTS)
-    find_package(Threads REQUIRED)
-    
     add_subdirectory(test/simple_ng)
     add_subdirectory(test/linux/slaveinfo)
     add_subdirectory(test/linux/eepromtool)
     add_subdirectory(test/linux/simple_test)
     add_subdirectory(demo)
-    
-    # Add ERob Motor Controller library
-    include_directories(include)
-    
-    # Set C++ standard
-    set(CMAKE_CXX_STANDARD 14)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    
-    # Source files for the motor controller library
-    set(EROB_CONTROLLER_SOURCES
-        src/ERobMotorController.cpp
-        src/ERobMotorController_Private.cpp
-    )
-    
-    # Create the motor controller library
-    add_library(ERobMotorController SHARED ${EROB_CONTROLLER_SOURCES})
-    target_link_libraries(ERobMotorController soem pthread)
-    target_compile_options(ERobMotorController PRIVATE -Wall -Wextra)
-    
-    # Install library and headers
-    install(TARGETS ERobMotorController 
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-    )
-    install(FILES include/ERobMotorController.hpp DESTINATION include)
-    
-    # Add example executables
-    add_executable(three_axis_example examples/ERobThreeAxisExample.cpp)
-    target_link_libraries(three_axis_example ERobMotorController soem pthread)
-    install(TARGETS three_axis_example DESTINATION bin)
-    
-    add_executable(controller_test examples/controller_test.cpp)
-    target_link_libraries(controller_test ERobMotorController soem pthread)
-    install(TARGETS controller_test DESTINATION bin)
 endif()

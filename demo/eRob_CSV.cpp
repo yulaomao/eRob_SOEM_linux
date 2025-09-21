@@ -1,9 +1,8 @@
-/* 
- * This program is an EtherCAT master implementation that initializes and configures EtherCAT slaves,
- * manages their states, and handles real-time data exchange. It includes functions for setting up 
- * PDO mappings, synchronizing time with the distributed clock, and controlling servomotors in 
- * various operational modes. The program also features multi-threading for real-time processing 
- * and monitoring of the EtherCAT network.
+/*
+ * 该程序为 EtherCAT 主站示例，负责初始化并配置 EtherCAT 从站，
+ * 管理它们的状态，并处理实时数据交换。包含 PDO 映射配置、
+ * 与分布式时钟（DC）同步的功能，以及伺服电机的多种运行模式控制。
+ * 程序使用多线程实现实时处理和网络监控。
  */
 //#include <QCoreApplication>
 
@@ -29,68 +28,68 @@
 
 #include <sched.h>
 
-// Global variables for EtherCAT communication
-char IOmap[4096]; // I/O mapping for EtherCAT
-int expectedWKC; // Expected Work Counter
-boolean needlf; // Flag to indicate if a line feed is needed
-volatile int wkc; // Work Counter (volatile to ensure it is updated correctly in multi-threaded context)
-boolean inOP; // Flag to indicate if the system is in operational state
-uint8 currentgroup = 0; // Current group for EtherCAT communication
-int dorun = 0; // Flag to indicate if the thread should run
-bool start_ecatthread_thread; // Flag to start the EtherCAT thread
-int ctime_thread; // Cycle time for the EtherCAT thread
+// EtherCAT 通信全局变量
+char IOmap[4096]; // EtherCAT 的 I/O 映射
+int expectedWKC; // 期望的工作计数器（Work Counter）
+boolean needlf; // 是否需要换行的标志
+volatile int wkc; // 实时更新的工作计数器（多线程可见）
+boolean inOP; // 系统是否处于 OP（运行）状态的标志
+uint8 currentgroup = 0; // 当前通信组索引
+int dorun = 0; // 线程是否运行的标志
+bool start_ecatthread_thread; // 是否启动 EtherCAT 实时线程的标志
+int ctime_thread; // EtherCAT 实时线程的周期（微秒）
 
-int64 toff, gl_delta; // Time offset and global delta for synchronization
+int64 toff, gl_delta; // 时钟同步用的时间偏移和全局 delta
 
-// Function prototypes for EtherCAT thread functions
-OSAL_THREAD_FUNC ecatcheck(void *ptr); // Function to check the state of EtherCAT slaves
-OSAL_THREAD_FUNC_RT ecatthread(void *ptr); // Real-time EtherCAT thread function
+// EtherCAT 线程函数原型
+OSAL_THREAD_FUNC ecatcheck(void *ptr); // 检查 EtherCAT 从站状态的线程函数原型
+OSAL_THREAD_FUNC_RT ecatthread(void *ptr); // 实时 EtherCAT 处理线程函数原型
 
-// Thread handles for the EtherCAT threads
-OSAL_THREAD_HANDLE thread1; // Handle for the EtherCAT check thread
-OSAL_THREAD_HANDLE thread2; // Handle for the real-time EtherCAT thread
+// EtherCAT 线程句柄
+OSAL_THREAD_HANDLE thread1; // 检查线程的句柄
+OSAL_THREAD_HANDLE thread2; // 实时线程的句柄
 
-// Function to synchronize time with the EtherCAT distributed clock
+// 与 EtherCAT 分布式时钟（DC）同步的函数声明
 void ec_sync(int64 reftime, int64 cycletime, int64 *offsettime);
-// Function to add nanoseconds to a timespec structure
+// 向 timespec 结构中添加纳秒的工具函数声明
 void add_timespec(struct timespec *ts, int64 addtime);
 
-// Define constants for stack size and timing
-#define stack64k (64 * 1024) // Stack size for threads
-#define NSEC_PER_SEC 1000000000   // Number of nanoseconds in one second
-#define EC_TIMEOUTMON 5000        // Timeout for monitoring in microseconds
-#define MAX_VELOCITY 30000        // Maximum velocity
-#define MAX_ACCELERATION 50000    // Maximum acceleration
+#define stack64k (64 * 1024) // 线程栈大小
+#define NSEC_PER_SEC 1000000000   // 每秒纳秒数
+#define EC_TIMEOUTMON 5000        // 监控超时（微秒）
+#define MAX_VELOCITY 30000        // 最大速度
+#define MAX_ACCELERATION 50000    // 最大加速度
 
-// Conversion units for the servomotor
-float Cnt_to_deg = 0.000686645; // Conversion factor from counts to degrees
-int8_t SLAVE_ID; // Slave ID for EtherCAT communication
+// 伺服电机单位换算
+float Cnt_to_deg = 0.000686645; // 计数到角度（度）的转换系数
+int8_t SLAVE_ID; // EtherCAT 从站 ID
 
-// Structure for RXPDO (Control data sent to slave)
+// RXPDO 结构（发送到从站的控制数据）
 typedef struct {
-    uint16_t controlword;      // 0x6040:0, 16 bits
-    int32_t target_velocity;   // 0x60FF:0, 32 bits
-    uint8_t mode_of_operation; // 0x6060:0, 8 bits
-    uint8_t padding;          // 8 bits padding for alignment
+    uint16_t controlword;      // 0x6040:0，16 位
+    int32_t target_velocity;   // 0x60FF:0，32 位 (CSV模式使用)
+    int32_t target_position;   // 0x607A:0，32 位 (PP模式使用)
+    uint8_t mode_of_operation; // 0x6060:0，8 位
+    uint8_t padding;           // 8 位对齐填充
 } __attribute__((__packed__)) rxpdo_t;
 
-// Structure for TXPDO (Status data received from slave)
+// TXPDO 结构（从从站接收的状态数据）
 typedef struct {
-    uint16_t statusword;      // 0x6041:0, 16 bits
-    int32_t actual_position;  // 0x6064:0, 32 bits
-    int32_t actual_velocity;  // 0x606C:0, 32 bits
-    int16_t actual_torque;    // 0x6077:0, 16 bits
+    uint16_t statusword;      // 0x6041:0，16 位
+    int32_t actual_position;  // 0x6064:0，32 位
+    int32_t actual_velocity;  // 0x606C:0，32 位
+    int16_t actual_torque;    // 0x6077:0，16 位
 } __attribute__((__packed__)) txpdo_t;
 
-// Global variables
+// 全局变量
 volatile int target_position = 0;
 pthread_mutex_t target_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t target_position_cond = PTHREAD_COND_INITIALIZER;
 bool target_updated = false;
 int32_t received_target = 0;
 
-rxpdo_t rxpdo;  // Global variable, used for sending data to slaves
-txpdo_t txpdo;  // Global variable, used for receiving data from slaves
+rxpdo_t rxpdo;  // 全局 RXPDO（发送给从站的数据）
+txpdo_t txpdo;  // 全局 TXPDO（从从站接收的数据）
 
 struct MotorStatus {
     bool is_operational;
@@ -100,87 +99,87 @@ struct MotorStatus {
     int16_t actual_torque;
 } motor_status;
 
-// Function to update motor status information
+// 更新电机状态信息的函数
 void update_motor_status(int slave_id) {
-    // Update status information from TXPDO
+    // 从 TXPDO 更新状态信息
     motor_status.status_word = txpdo.statusword;
     motor_status.actual_position = txpdo.actual_position;
     motor_status.actual_velocity = txpdo.actual_velocity;
     motor_status.actual_torque = txpdo.actual_torque;
     
-    // Check status word to determine if motor is operational
-    // Bits 0-3 should be 0111 for enabled and ready state
+    // 检查状态字以判断电机是否处于可操作状态
+    // 状态字的位0-3 为 0111 表示已启用并就绪
     motor_status.is_operational = (txpdo.statusword & 0x0F) == 0x07;
 }
 
 //##################################################################################################
-// Function: Set the CPU affinity for a thread
+// 函数：为线程设置 CPU 亲和性
 void set_thread_affinity(pthread_t thread, int cpu_core) {
-    cpu_set_t cpuset; // CPU set to specify which CPUs the thread can run on
-    CPU_ZERO(&cpuset); // Clear the CPU set
-    CPU_SET(cpu_core, &cpuset); // Add the specified CPU core to the set
+    cpu_set_t cpuset; // CPU 集合，用于指定线程可运行的 CPU
+    CPU_ZERO(&cpuset); // 清空 CPU 集合
+    CPU_SET(cpu_core, &cpuset); // 将指定的 CPU 核加入集合
 
-    // Set the thread's CPU affinity
+    // 设置线程的 CPU 亲和性
     int result = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
     if (result != 0) {
-        printf("Unable to set CPU affinity for thread %d\n", cpu_core); // Error message if setting fails
+    printf("无法为线程绑定 CPU %d\n", cpu_core); // 设置失败的错误信息
     } else {
-        printf("Thread successfully bound to CPU %d\n", cpu_core); // Confirmation message if successful
+    printf("线程已成功绑定到 CPU %d\n", cpu_core); // 设置成功的确认信息
     }
 }
 
 //##################################################################################################
-// Function prototype for the EtherCAT test function
+// EtherCAT 测试函数原型
 int erob_test();
 
 uint16_t data_R;
 
 int erob_test() {
-    int rdl; // Variable to hold read data length
-    SLAVE_ID = 1; // Set the slave ID to 1
-    int i, j, oloop, iloop, chk; // Loop control variables
+    int rdl; // 读取数据长度
+    SLAVE_ID = 1; // 将从站 ID 设为 1
+    int i, j, oloop, iloop, chk; // 循环控制变量
 
-    // 1. Call ec_config_init() to move from INIT to PRE-OP state.
+    // 1. 调用 ec_config_init() 将从 INIT 切换到 PRE-OP 状态
     printf("__________STEP 1___________________\n");
-    // Initialize EtherCAT master on the specified network interface
-    if (ec_init("enp6s0") <= 0) {
-        printf("Error: Could not initialize EtherCAT master!\n");
-        printf("No socket connection on Ethernet port. Execute as root.\n");
+    // 在指定的网络接口上初始化 EtherCAT 主站
+    if (ec_init("enp3s0") <= 0) {
+    printf("错误：无法初始化 EtherCAT 主站！\n");
+    printf("请以 root 身份运行，检查以太网端口套接字连接。\n");
         printf("___________________________________________\n");
-        return -1; // Return error if initialization fails
+    return -1; // 初始化失败则返回错误
     }
     printf("EtherCAT master initialized successfully.\n");
     printf("___________________________________________\n");
 
-    // Search for EtherCAT slaves on the network
+    // 在网络上搜索 EtherCAT 从站
     if (ec_config_init(FALSE) <= 0) {
-        printf("Error: Cannot find EtherCAT slaves!\n");
+    printf("错误：未发现 EtherCAT 从站！\n");
         printf("___________________________________________\n");
-        ec_close(); // Close the EtherCAT connection
-        return -1; // Return error if no slaves are found
+    ec_close(); // 关闭 EtherCAT 连接
+    return -1; // 没有发现从站则返回错误
     }
-    printf("%d slaves found and configured.\n", ec_slavecount); // Print the number of slaves found
+    printf("%d 个从站已发现并配置。\n", ec_slavecount); // 打印发现的从站数量
     printf("___________________________________________\n");
 
-    // 2. Change to pre-operational state to configure the PDO registers
+    // 2. 切换到 PRE-OP（预运行）状态以配置 PDO 寄存器
     printf("__________STEP 2___________________\n");
 
-    // Check if the slave is ready to map
-    ec_readstate(); // Read the state of the slaves
+    // 检查从站是否准备好进行映射
+    ec_readstate(); // 读取从站状态
 
     for(int i = 1; i <= ec_slavecount; i++) { // Loop through each slave
-        if(ec_slave[i].state != EC_STATE_PRE_OP) { // If the slave is not in PRE-OP state
-            // Print the current state and status code of the slave
+        if(ec_slave[i].state != EC_STATE_PRE_OP) { // 从站未处于 PRE-OP
+            // 打印该从站的当前状态和 AL 状态码
             printf("Slave %d State=0x%2.2x StatusCode=0x%4.4x : %s\n",
                    i, ec_slave[i].state, ec_slave[i].ALstatuscode, ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
-            printf("\nRequest init state for slave %d\n", i); // Request to change the state to INIT
-            ec_slave[i].state = EC_STATE_INIT; // Set the slave state to INIT
+            printf("\n请求从站 %d 进入 INIT 状态\n", i); // 请求将状态改为 INIT
+            ec_slave[i].state = EC_STATE_INIT; // 将从站状态设为 INIT
             printf("___________________________________________\n");
         } else { // If the slave is in PRE-OP state
-            ec_slave[0].state = EC_STATE_PRE_OP; // Set the first slave to PRE-OP state
-            /* Request EC_STATE_PRE_OP state for all slaves */
+            ec_slave[0].state = EC_STATE_PRE_OP; // 将主站（索引0）设为 PRE-OP
+            /* 请求所有从站进入 EC_STATE_PRE_OP 状态 */
             ec_writestate(0); // Write the state change to the slave
-            /* Wait for all slaves to reach the PRE-OP state */
+            /* 等待所有从站进入 PRE-OP 状态 */
             if ((ec_statecheck(0, EC_STATE_PRE_OP,  3 * EC_TIMEOUTSTATE)) == EC_STATE_PRE_OP) {
                 printf("State changed to EC_STATE_PRE_OP: %d \n", EC_STATE_PRE_OP);
                 printf("___________________________________________\n");
@@ -210,19 +209,23 @@ int erob_test() {
         map_object = 0x60400010;
         retval += ec_SDOwrite(i, 0x1600, 0x01, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        // Target velocity (0x60FF:0, 32 bits)
+        // Target velocity (0x60FF:0, 32 bits) - for CSV mode
         map_object = 0x60FF0020;
         retval += ec_SDOwrite(i, 0x1600, 0x02, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
+        // Target position (0x607A:0, 32 bits) - for PP mode
+        map_object = 0x607A0020;
+        retval += ec_SDOwrite(i, 0x1600, 0x03, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
+        
         // Operation mode (0x6060:0, 8 bits)
         map_object = 0x60600008;
-        retval += ec_SDOwrite(i, 0x1600, 0x03, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
+        retval += ec_SDOwrite(i, 0x1600, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
         // Padding (8 bits padding)
         map_object = 0x00000008;
-        retval += ec_SDOwrite(i, 0x1600, 0x04, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
+        retval += ec_SDOwrite(i, 0x1600, 0x05, FALSE, sizeof(map_object), &map_object, EC_TIMEOUTSAFE);
         
-        uint8 map_count = 4;  // Now there are 4 objects, including padding
+        uint8 map_count = 5;  // Now there are 5 objects, including padding
         retval += ec_SDOwrite(i, 0x1600, 0x00, FALSE, sizeof(map_count), &map_count, EC_TIMEOUTSAFE);
         
         // Configure RXPDO allocation
@@ -240,7 +243,7 @@ int erob_test() {
         return -1;
     }
 
-    printf("RXPOD Mapping set correctly.\n");
+    printf("RXPDO 映射设置正确。\n");
     printf("___________________________________________\n");
 
     //........................................................................................
@@ -290,7 +293,7 @@ int erob_test() {
         return -1;
     }
 
-    printf("TXPDO Mapping set successfully\n");
+    printf("TXPDO 映射设置成功\n");
     printf("___________________________________________\n");
 
    //##################################################################################################
@@ -312,7 +315,8 @@ int erob_test() {
         printf("Slave %d: Type %d, Address 0x%02x, State Machine actual %d, required %d\n", 
                i, ec_slave[i].eep_id, ec_slave[i].configadr, ec_slave[i].state, EC_STATE_INIT);
         printf("___________________________________________\n");
-        ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);  //Synchronize the distributed clock for the slave
+        // Defer enabling Sync0 until after OP to avoid blocking transition
+        ecx_dcsync0(&ecx_context, i, FALSE, 0, 0);
     }
 
     // Map the configured PDOs to the IOmap
@@ -331,7 +335,7 @@ int erob_test() {
     }
 
     // Configure distributed clock
-    printf("Configuring DC...\n");
+    printf("正在配置 DC...\n");
     ec_configdc();
     osal_usleep(200000);  // Wait for DC configuration to take effect
 
@@ -343,8 +347,8 @@ int erob_test() {
         }
     }
 
-    // Request to switch to SAFE-OP state
-    printf("Requesting SAFE_OP state...\n");
+    // 请求切换到 SAFE-OP 状态
+    printf("请求进入 SAFE_OP 状态...\n");
     ec_slave[0].state = EC_STATE_SAFE_OP;
     ec_writestate(0);
     osal_usleep(200000);  // Give enough time for state transition
@@ -408,6 +412,17 @@ int erob_test() {
 
     printf("__________STEP 6___________________\n");
 
+    // While still in SAFE_OP, preconfigure operation mode via SDO
+    {
+        uint8 operation_mode_csv = 9; // CSV
+        for (int i = 1; i <= ec_slavecount; i++) {
+            int ret = ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode_csv), &operation_mode_csv, EC_TIMEOUTSAFE);
+            if (ret <= 0) {
+                printf("警告：在 SAFE_OP 中为从站 %d 预设置 0x6060 (CSV) 失败\n", i);
+            }
+        }
+    }
+
     // Start the EtherCAT thread for real-time processing
     start_ecatthread_thread = TRUE; // Flag to indicate that the EtherCAT thread should start
     osal_thread_create_rt(&thread1, stack64k * 2, (void *)&ecatthread, (void *)&ctime_thread); // Create the real-time EtherCAT thread
@@ -422,24 +437,107 @@ int erob_test() {
     // 8. Transition to OP state
     printf("__________STEP 8___________________\n");
 
-    // Send process data to the slaves
-    ec_send_processdata();
-    wkc = ec_receive_processdata(EC_TIMEOUTRET); // Receive process data and store the Work Counter
-
-    // Set the first slave to operational state
-    ec_slave[0].state = EC_STATE_OPERATIONAL; // Change the state of the first slave to OP
-    ec_writestate(0); // Write the state change to the slave
-
-    // Wait for the state transition to complete
-    if ((ec_statecheck(0, EC_STATE_OPERATIONAL, 5 * EC_TIMEOUTSTATE)) == EC_STATE_OPERATIONAL) {
-        printf("State changed to EC_STATE_OPERATIONAL: %d\n", EC_STATE_OPERATIONAL); // Confirm successful state change
-        printf("___________________________________________\n");
-    } else {
-        printf("State could not be changed to EC_STATE_OPERATIONAL\n"); // Error message if state change fails
-        for (int cnt = 1; cnt <= ec_slavecount; cnt++) {
-            printf("ALstatuscode: %d\n", ecx_context.slavelist[cnt].ALstatuscode); // Print AL status codes for each slave
+    // 修改：在转换到OP状态之前，确保所有从站都正确配置
+    for (int i = 1; i <= ec_slavecount; i++) {
+        // 检查从站是否在SAFE_OP状态
+        if (ec_slave[i].state != EC_STATE_SAFE_OP) {
+            printf("警告：从站 %d 在尝试切换到 OP 之前未处于 SAFE_OP 状态\n", i);
+            return -1;
         }
     }
+
+    // 初始化PDO数据
+    rxpdo.controlword = 0x0000;  // 先发送停止命令
+    rxpdo.target_velocity = 0;
+    rxpdo.mode_of_operation = 9;  // CSV mode
+    rxpdo.padding = 0;
+
+    // 发送初始PDO数据
+    for (int slave = 1; slave <= ec_slavecount; slave++) {
+        memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
+    }
+
+    // 发送几次数据以确保从站准备好
+    for (int i = 0; i < 5; i++) {
+        ec_send_processdata();
+        wkc = ec_receive_processdata(EC_TIMEOUTRET);
+        printf("Pre-OP data exchange %d: wkc=%d, expected=%d\n", i+1, wkc, expectedWKC);
+        osal_usleep(10000);  // 10ms delay
+    }
+
+    // 现在请求切换到 OP（运行）状态
+    printf("请求进入 OPERATIONAL 状态...\n");
+    // Ensure Sync0 is enabled before transitioning to OP for DC slaves
+    for (int i = 1; i <= ec_slavecount; i++) {
+        if (ec_slave[i].hasdc) {
+            ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);
+        }
+    }
+    ec_slave[0].state = EC_STATE_OPERATIONAL;
+    ec_writestate(0);
+
+    // 等待状态转换，同时持续进行PDO交换（部分驱动需要）
+    int timeout_count = 0;
+    const int MAX_TIMEOUT = 2500;  // ~5秒超时（2ms周期）
+    while (timeout_count < MAX_TIMEOUT) {
+        ec_send_processdata();
+        wkc = ec_receive_processdata(EC_TIMEOUTRET);
+
+        // 小步轮询状态，减少打印频率
+        ec_readstate();
+        bool all_operational = true;
+        for (int i = 1; i <= ec_slavecount; i++) {
+            if (ec_slave[i].state != EC_STATE_OPERATIONAL) {
+                all_operational = false;
+                if ((timeout_count % 50) == 0) {
+                    printf("Slave %d state: 0x%02x, AL status: 0x%04x\n",
+                           i, ec_slave[i].state, ec_slave[i].ALstatuscode);
+                }
+                // Try to clear SAFE_OP+ERROR and push to OP individually
+                if (ec_slave[i].state == (EC_STATE_SAFE_OP + EC_STATE_ERROR)) {
+                    ec_slave[i].state = (EC_STATE_SAFE_OP + EC_STATE_ACK);
+                    ec_writestate(i);
+                } else if (ec_slave[i].state == EC_STATE_SAFE_OP) {
+                    ec_slave[i].state = EC_STATE_OPERATIONAL;
+                    ec_writestate(i);
+                }
+            }
+        }
+        if (all_operational) {
+            printf("All slaves reached OPERATIONAL state\n");
+            break;
+        }
+        if ((timeout_count % 100) == 0) {
+            // periodically nudge state request to OP
+            ec_slave[0].state = EC_STATE_OPERATIONAL;
+            ec_writestate(0);
+        }
+        timeout_count++;
+        osal_usleep(1000);  // 1ms周期，与DC周期一致
+    }
+
+    if (timeout_count >= MAX_TIMEOUT) {
+        printf("ERROR: Failed to reach OPERATIONAL state within timeout\n");
+        for (int i = 1; i <= ec_slavecount; i++) {
+            printf("Slave %d: State=0x%02x, ALstatus=0x%04x : %s\n",
+                   i, ec_slave[i].state, ec_slave[i].ALstatuscode,
+                   ec_ALstatuscode2string(ec_slave[i].ALstatuscode));
+        }
+        return -1;
+    }
+
+    // 标记OP，允许实时线程开始循环
+    inOP = TRUE;
+
+    // Enable Sync0 only after OP is reached
+    for (int i = 1; i <= ec_slavecount; i++) {
+        if (ec_slave[i].hasdc) {
+            ecx_dcsync0(&ecx_context, i, TRUE, 1000000, 0);
+        }
+    }
+
+    printf("State changed to EC_STATE_OPERATIONAL: %d\n", EC_STATE_OPERATIONAL);
+    printf("___________________________________________\n");
 
     // Read and display the state of all slaves
     ec_readstate(); // Read the state of all slaves
@@ -454,43 +552,49 @@ int erob_test() {
     printf("__________STEP 9___________________\n");
 
     if (ec_slave[0].state == EC_STATE_OPERATIONAL) {
-        printf("Operational state reached for all slaves.\n");
+    printf("所有从站已进入运行（OP）状态。\n");
         
-        uint8 operation_mode = 9;  // CSV mode
-        uint16_t Control_Word = 0;
-        int32_t Max_Velocity = 5000;  // 最大速度限制
-        int32_t Max_Acceleration = 5000;  // 最大加速度限制
-        int32_t Quick_Stop_Decel = 10000;  // 快速停止减速度
-        int32_t Profile_Decel = 5000;  // 减速度
-        
+        // 配置每个从站的参数
         for (int i = 1; i <= ec_slavecount; i++) {
-            // 先禁用电机
-            Control_Word = 0x0000;
-            ec_SDOwrite(i, 0x6040, 0x00, FALSE, sizeof(Control_Word), &Control_Word, EC_TIMEOUTSAFE);
-            osal_usleep(100000);
-
-            // 设置操作模式为CSV
-            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE);
-            osal_usleep(100000);
-
-            // 设置速度相关参数
+            uint8 operation_mode = 9;  // CSV mode
+            uint16_t Control_Word = 0;
+            int32_t Max_Velocity = 5000;
+            int32_t Max_Acceleration = 5000;
+            int32_t Quick_Stop_Decel = 10000;
+            int32_t Profile_Decel = 5000;
+            
+            printf("Configuring slave %d...\n", i);
+            
+            // 设置操作模式
+            if (ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode), &operation_mode, EC_TIMEOUTSAFE) <= 0) {
+                printf("Failed to set operation mode for slave %d\n", i);
+            }
+            
+            // 设置速度参数
             ec_SDOwrite(i, 0x6080, 0x00, FALSE, sizeof(Max_Velocity), &Max_Velocity, EC_TIMEOUTSAFE);
             ec_SDOwrite(i, 0x60C5, 0x00, FALSE, sizeof(Max_Acceleration), &Max_Acceleration, EC_TIMEOUTSAFE);
             ec_SDOwrite(i, 0x6085, 0x00, FALSE, sizeof(Quick_Stop_Decel), &Quick_Stop_Decel, EC_TIMEOUTSAFE);
             ec_SDOwrite(i, 0x6084, 0x00, FALSE, sizeof(Profile_Decel), &Profile_Decel, EC_TIMEOUTSAFE);
             
-            osal_usleep(100000);
-            
-            // 验证模式是否设置成功
+            // 验证模式设置
             uint8 actual_mode;
             int size = sizeof(actual_mode);
             if (ec_SDOread(i, 0x6061, 0x00, FALSE, &size, &actual_mode, EC_TIMEOUTSAFE) > 0) {
-                printf("Actual operation mode: %d\n", actual_mode);
+                printf("Slave %d actual operation mode: %d\n", i, actual_mode);
             }
         }
 
+        // 等待实时线程稳定运行
+        osal_usleep(2000000);  // 2秒
+        
+        printf("System running in operational mode...\n");
         while(1) {
-            osal_usleep(100000);
+            osal_usleep(1000000);  // 1秒检查一次
+            
+            // 检查通信状态
+            if (wkc < expectedWKC) {
+                printf("WARNING: Communication issue detected (wkc=%d, expected=%d)\n", wkc, expectedWKC);
+            }
         }
     }
 
@@ -498,7 +602,7 @@ int erob_test() {
 
     ec_close();
 
-     printf("\nRequest init state for all slaves\n");
+    printf("\n请求所有从站进入 INIT 状态\n");
      ec_slave[0].state = EC_STATE_INIT;
      /* request INIT state for all slaves */
      ec_writestate(0);
@@ -508,42 +612,42 @@ int erob_test() {
     return 0;
 }
 
-/* 
- * PI calculation to synchronize Linux time with the Distributed Clock (DC) time.
- * This function calculates the offset time needed to align the Linux time with the DC time.
+/*
+ * PI 控制，用于将 Linux 时间与分布式时钟（DC）时间同步。
+ * 计算需要应用到本地时钟的偏移量以对齐 DC 时间。
  */
 void ec_sync(int64 reftime, int64 cycletime, int64 *offsettime) {
-    static int64 integral = 0; // Integral term for PI controller
-    int64 delta; // Variable to hold the difference between reference time and cycle time
-    delta = (reftime) % cycletime; // Calculate the delta time
+    static int64 integral = 0; // PI 控制中的积分项
+    int64 delta; // 记录参考时间与周期时间之差
+    delta = (reftime) % cycletime; // 计算差值
     if (delta > (cycletime / 2)) {
-        delta = delta - cycletime; // Adjust delta if it's greater than half the cycle time
+        delta = delta - cycletime; // 若差值大于半个周期则调整
     }
     if (delta > 0) {
-        integral++; // Increment integral if delta is positive
+        integral++; // 若差值为正则增加积分
     }
     if (delta < 0) {
-        integral--; // Decrement integral if delta is negative
+        integral--; // 若差值为负则减少积分
     }
-    *offsettime = -(delta / 100) - (integral / 20); // Calculate the offset time
-    gl_delta = delta; // Update global delta variable
+    *offsettime = -(delta / 100) - (integral / 20); // 计算并输出偏移量
+    gl_delta = delta; // 更新全局 delta
 }
 
-/* 
- * Add nanoseconds to a timespec structure.
- * This function updates the timespec structure by adding a specified amount of time.
+/*
+ * 向 timespec 结构添加指定的纳秒数。
+ * 该函数会处理跨秒的进位。
  */
 void add_timespec(struct timespec *ts, int64 addtime) {
-    int64 sec, nsec; // Variables to hold seconds and nanoseconds
+    int64 sec, nsec; // 秒和纳秒部分
 
-    nsec = addtime % NSEC_PER_SEC; // Calculate nanoseconds to add
-    sec = (addtime - nsec) / NSEC_PER_SEC; // Calculate seconds to add
-    ts->tv_sec += sec; // Update seconds in timespec
-    ts->tv_nsec += nsec; // Update nanoseconds in timespec
-    if (ts->tv_nsec >= NSEC_PER_SEC) { // If nanoseconds exceed 1 second
-        nsec = ts->tv_nsec % NSEC_PER_SEC; // Adjust nanoseconds
-        ts->tv_sec += (ts->tv_nsec - nsec) / NSEC_PER_SEC; // Increment seconds
-        ts->tv_nsec = nsec; // Set adjusted nanoseconds
+    nsec = addtime % NSEC_PER_SEC; // 计算要添加的纳秒
+    sec = (addtime - nsec) / NSEC_PER_SEC; // 计算要添加的秒数
+    ts->tv_sec += sec; // 增加秒
+    ts->tv_nsec += nsec; // 增加纳秒
+    if (ts->tv_nsec >= NSEC_PER_SEC) { // 若纳秒超出一秒则进位
+        nsec = ts->tv_nsec % NSEC_PER_SEC; // 计算剩余纳秒
+        ts->tv_sec += (ts->tv_nsec - nsec) / NSEC_PER_SEC; // 增加秒数
+        ts->tv_nsec = nsec; // 设置剩余纳秒
     }
 }
 
@@ -568,7 +672,7 @@ OSAL_THREAD_FUNC ecatcheck(void *ptr) {
             // Increase the consecutive error count
             if (wkc < expectedWKC) {
                 consecutive_errors++;
-                printf("WARNING: Working counter error (%d/%d), consecutive errors: %d\n", 
+                printf("警告：工作计数器错误 (%d/%d)，连续错误次数：%d\n", 
                        wkc, expectedWKC, consecutive_errors);
             } else {
                 consecutive_errors = 0;
@@ -576,7 +680,7 @@ OSAL_THREAD_FUNC ecatcheck(void *ptr) {
 
             // If the consecutive errors exceed the threshold, attempt reinitialization
             if (consecutive_errors >= MAX_CONSECUTIVE_ERRORS) {
-                printf("ERROR: Too many consecutive errors, attempting recovery...\n");
+                printf("错误：连续错误次数过多，尝试恢复中...\n");
                 ec_group[currentgroup].docheckstate = TRUE;
                 // Reset the error count
                 consecutive_errors = 0;
@@ -588,23 +692,23 @@ OSAL_THREAD_FUNC ecatcheck(void *ptr) {
                 if ((ec_slave[slave].group == currentgroup) && (ec_slave[slave].state != EC_STATE_OPERATIONAL)) {
                     ec_group[currentgroup].docheckstate = TRUE;
                     if (ec_slave[slave].state == (EC_STATE_SAFE_OP + EC_STATE_ERROR)) {
-                        printf("ERROR: Slave %d is in SAFE_OP + ERROR, attempting ack.\n", slave);
+                        printf("错误：从站 %d 处于 SAFE_OP + ERROR，尝试 ACK。\n", slave);
                         ec_slave[slave].state = (EC_STATE_SAFE_OP + EC_STATE_ACK);
                         ec_writestate(slave);
                     } else if (ec_slave[slave].state == EC_STATE_SAFE_OP) {
-                        printf("WARNING: Slave %d is in SAFE_OP, changing to OPERATIONAL.\n", slave);
+                        printf("警告：从站 %d 处于 SAFE_OP，尝试切换到 OPERATIONAL。\n", slave);
                         ec_slave[slave].state = EC_STATE_OPERATIONAL;
                         ec_writestate(slave);
                     } else if (ec_slave[slave].state > EC_STATE_NONE) {
                         if (ec_reconfig_slave(slave, EC_TIMEOUTMON)) {
                             ec_slave[slave].islost = FALSE;
-                            printf("MESSAGE: Slave %d reconfigured\n", slave);
+                            printf("消息：从站 %d 已重新配置\n", slave);
                         }
                     } else if (!ec_slave[slave].islost) {
                         ec_statecheck(slave, EC_STATE_OPERATIONAL, EC_TIMEOUTRET);
                         if (!ec_slave[slave].state) {
                             ec_slave[slave].islost = TRUE;
-                            printf("ERROR: Slave %d lost\n", slave);
+                            printf("错误：从站 %d 丢失\n", slave);
                         }
                     }
                 }
@@ -612,16 +716,16 @@ OSAL_THREAD_FUNC ecatcheck(void *ptr) {
                     if (!ec_slave[slave].state) {
                         if (ec_recover_slave(slave, EC_TIMEOUTMON)) {
                             ec_slave[slave].islost = FALSE;
-                            printf("MESSAGE: Slave %d recovered\n", slave);
+                            printf("消息：从站 %d 已恢复\n", slave);
                         }
                     } else {
                         ec_slave[slave].islost = FALSE;
-                        printf("MESSAGE: Slave %d found\n", slave);
+                        printf("消息：发现从站 %d\n", slave);
                     }
                 }
             }
             if (!ec_group[currentgroup].docheckstate) {
-                printf("OK: All slaves resumed OPERATIONAL.\n");
+                printf("OK：所有从站已恢复到运行（OP）状态。\n");
             }
         }
         osal_usleep(10000); 
@@ -644,6 +748,11 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
     struct timespec cycle_start, cycle_end;
     long cycle_time_ns;
 
+    // Set thread to realtime, but below main priority to avoid starvation
+    struct sched_param rt_param;
+    rt_param.sched_priority = 80;
+    sched_setscheduler(0, SCHED_FIFO, &rt_param);
+
     clock_gettime(CLOCK_MONOTONIC, &ts);
     ht = (ts.tv_nsec / 1000000) + 1;
     ts.tv_nsec = ht * 1000000;
@@ -655,23 +764,26 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
 
     toff = 0;
     dorun = 0;
-    
-    // 初始化PDO数据
+
+    // Initialize PDO (also valid before OP)
     rxpdo.controlword = 0x0080;
     rxpdo.target_velocity = 0;
+    rxpdo.target_position = 0;
     rxpdo.mode_of_operation = 9;  // CSV mode (9)
     rxpdo.padding = 0;
-    
-    // 发送初始数据
+
     for (int slave = 1; slave <= ec_slavecount; slave++) {
         memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
     }
     ec_send_processdata();
-    wkc = ec_receive_processdata(EC_TIMEOUTRET);  // 确保第一次通信成功
+    wkc = ec_receive_processdata(EC_TIMEOUTRET);
 
     int step = 0;
     int retry_count = 0;
     const int MAX_RETRY = 3;
+    bool mode_switched = false;  // 标记是否已切换到PP模式
+    int csv_run_cycles = 0;      // CSV模式运行的周期数
+    const int CSV_RUN_TIME_CYCLES = 2000;  // 2秒 = 2000个1ms周期
 
     while (1) {
         clock_gettime(CLOCK_MONOTONIC, &cycle_start);
@@ -694,9 +806,11 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
         
         dorun++;
 
-        if (start_ecatthread_thread) {
-            // Receive process data
-            wkc = ec_receive_processdata(EC_TIMEOUTRET);
+        // Always exchange PDOs to support OP transition with DC
+        ec_send_processdata();
+        wkc = ec_receive_processdata(EC_TIMEOUTRET);
+
+        if (inOP) {
 
             if (wkc >= expectedWKC) {
                 retry_count = 0;  // Reset retry counter
@@ -705,35 +819,153 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
                     memcpy(&txpdo, ec_slave[slave].inputs, sizeof(txpdo_t));
                 }
 
-                // State machine control
+                // State machine control (EN enable sequence then run)
                 if (step <= 1500) {
+                    // 初始状态
                     rxpdo.controlword = 0x0080;
                     rxpdo.target_velocity = 0;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 9;  // CSV mode
                 } else if (step <= 1800) {
+                    // Shutdown命令
                     rxpdo.controlword = 0x0006;
                     rxpdo.target_velocity = 0;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 9;
                 } else if (step <= 2000) {
+                    // Switch On命令
                     rxpdo.controlword = 0x0007;
                     rxpdo.target_velocity = 0;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 9;
                 } else if (step <= 2400) {
+                    // Enable Operation命令
                     rxpdo.controlword = 0x000F;
                     rxpdo.target_velocity = 0;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 9;
                 } else {
-                    rxpdo.controlword = 0x000F;
-                    rxpdo.target_velocity = 5000;  // Set target velocity to 1000 counts/s
+                    // 运行阶段
+                    if (!mode_switched && csv_run_cycles < CSV_RUN_TIME_CYCLES) {
+                        // CSV模式运行阶段（2秒）
+                        rxpdo.controlword = 0x000F;
+                        rxpdo.target_velocity = 2000;  // CSV模式速度
+                        rxpdo.target_position = 0;     // CSV模式不使用位置
+                        rxpdo.mode_of_operation = 9;   // CSV mode
+                        csv_run_cycles++;
+                        
+                        if (dorun % 200 == 0) {
+                            printf("CSV模式运行中: cycle=%d/%d, vel=%d\n", 
+                                   csv_run_cycles, CSV_RUN_TIME_CYCLES, rxpdo.target_velocity);
+                        }
+                    } else if (!mode_switched) {
+                        // 切换到PP模式 - 保持使能状态下切换
+                        printf(">>> 切换到PP模式，目标位置：0\n");
+                        
+                        // 通过SDO设置PP模式参数
+                        for (int i = 1; i <= ec_slavecount; i++) {
+                            uint8 pp_mode = 1;
+                            uint32_t profile_velocity = 5000;    // 增加profile速度
+                            uint32_t profile_acceleration = 10000;
+                            uint32_t profile_deceleration = 10000;
+                            
+                            // 先设置PP模式参数
+                            ec_SDOwrite(i, 0x6081, 0x00, FALSE, sizeof(profile_velocity), &profile_velocity, EC_TIMEOUTSAFE);
+                            ec_SDOwrite(i, 0x6083, 0x00, FALSE, sizeof(profile_acceleration), &profile_acceleration, EC_TIMEOUTSAFE);
+                            ec_SDOwrite(i, 0x6084, 0x00, FALSE, sizeof(profile_deceleration), &profile_deceleration, EC_TIMEOUTSAFE);
+                            
+                            // 设置目标位置
+                            int32_t target_pos = 0;
+                            ec_SDOwrite(i, 0x607A, 0x00, FALSE, sizeof(target_pos), &target_pos, EC_TIMEOUTSAFE);
+                            
+                            // 最后切换模式
+                            ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(pp_mode), &pp_mode, EC_TIMEOUTSAFE);
+                            
+                            printf("PP模式参数设置完成: vel=%d, acc=%d, dec=%d, target=%d\n", 
+                                   profile_velocity, profile_acceleration, profile_deceleration, target_pos);
+                        }
+                        
+                        // 保持使能状态，切换模式
+                        rxpdo.controlword = 0x000F;  // 保持Enable Operation状态
+                        rxpdo.target_velocity = 0;    // CSV模式不再使用
+                        rxpdo.target_position = 0;    // PP模式目标位置
+                        rxpdo.mode_of_operation = 1;  // 切换到PP mode
+                        mode_switched = true;
+                        
+                        printf(">>> PP模式切换完成，保持使能状态\n");
+                    } else {
+                        // PP模式正常运行 - 使用更明确的运动触发序列
+                        static bool setpoint_sent = false;
+                        static int pp_step = 0;
+                        
+                        if (pp_step < 50) {
+                            // 步骤1: 确保在PP模式下稳定运行
+                            rxpdo.controlword = 0x000F;  // Enable Operation
+                            rxpdo.target_velocity = 0;
+                            rxpdo.target_position = 0;   // 目标位置为0
+                            rxpdo.mode_of_operation = 1; // PP mode
+                            pp_step++;
+                            
+                            if (pp_step == 1) {
+                                printf(">>> PP模式稳定期，等待模式切换完成\n");
+                            }
+                        } else if (pp_step < 100) {
+                            // 步骤2: 发送新的目标位置
+                            rxpdo.controlword = 0x001F;  // Enable Operation + new setpoint + halt=0
+                            rxpdo.target_velocity = 0;
+                            rxpdo.target_position = 0;   // 目标位置为0
+                            rxpdo.mode_of_operation = 1; // PP mode
+                            pp_step++;
+                            
+                            if (pp_step == 51) {
+                                printf(">>> PP模式发送新目标位置：0，当前位置：%d\n", txpdo.actual_position);
+                            }
+                        } else {
+                            // 步骤3: 保持运行状态
+                            rxpdo.controlword = 0x000F;  // 保持Enable Operation状态
+                            rxpdo.target_velocity = 0;
+                            rxpdo.target_position = 0;   // 目标位置为0
+                            rxpdo.mode_of_operation = 1; // PP mode
+                        }
+                        
+                        // 检查是否到达目标位置
+                        if (dorun % 500 == 0) {
+                            int position_error = abs(txpdo.actual_position - 0);
+                            printf("PP模式运行中: pos=%d, target=0, error=%d, vel=%d, status=0x%04x, step=%d\n", 
+                                   txpdo.actual_position, position_error, txpdo.actual_velocity, txpdo.statusword, pp_step);
+                            
+                            if (position_error < 100 && abs(txpdo.actual_velocity) < 50) {
+                                printf(">>> 已到达目标位置0附近\n");
+                            }
+                        }
+                    }
                 }
-                rxpdo.mode_of_operation = 9;  // CSV mode
 
                 // Send data to slaves
                 for (int slave = 1; slave <= ec_slavecount; slave++) {
                     memcpy(ec_slave[slave].outputs, &rxpdo, sizeof(rxpdo_t));
                 }
 
-                if (dorun % 100 == 0) {
-                    printf("Status: SW=0x%04x, pos=%d, vel=%d, target_vel=%d, mode=%d\n",
-                           txpdo.statusword,
+                if (dorun % 200 == 0 && step > 2400) {
+                    const char* mode_name = (rxpdo.mode_of_operation == 9) ? "CSV" : "PP";
+                    
+                    // 添加状态字解析
+                    const char* state_desc = "";
+                    uint16_t sw = txpdo.statusword;
+                    if ((sw & 0x004F) == 0x0000) state_desc = "Not ready to switch on";
+                    else if ((sw & 0x004F) == 0x0040) state_desc = "Switch on disabled";
+                    else if ((sw & 0x006F) == 0x0021) state_desc = "Ready to switch on";
+                    else if ((sw & 0x006F) == 0x0023) state_desc = "Switched on";
+                    else if ((sw & 0x006F) == 0x0027) state_desc = "Operation enabled";
+                    else if ((sw & 0x006F) == 0x0007) state_desc = "Quick stop active";
+                    else if ((sw & 0x004F) == 0x000F) state_desc = "Fault reaction active";
+                    else if ((sw & 0x004F) == 0x0008) state_desc = "Fault";
+                    else state_desc = "Unknown state";
+                    
+                    printf("Status [%s]: SW=0x%04x (%s), pos=%d, vel=%d, target_vel=%d, target_pos=%d\n",
+                           mode_name, txpdo.statusword, state_desc,
                            txpdo.actual_position, txpdo.actual_velocity,
-                           rxpdo.target_velocity, rxpdo.mode_of_operation);
+                           rxpdo.target_velocity, rxpdo.target_position);
                 }
 
                 if (step < 8000) {
@@ -742,7 +974,7 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
             } else {
                 retry_count++;
                 if (retry_count >= MAX_RETRY) {
-                    printf("ERROR: Communication failure after %d retries\n", retry_count);
+                    printf("错误：通信失败，重试 %d 次后仍未成功\n", retry_count);
                     retry_count = 0;
                 }
             }
@@ -751,9 +983,6 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
             if (ec_slave[0].hasdc) {
                 ec_sync(ec_DCtime, cycletime, &toff);
             }
-
-            // send process data
-            ec_send_processdata();
         }
 
         // monitor cycle time
@@ -761,8 +990,8 @@ OSAL_THREAD_FUNC_RT ecatthread(void *ptr) {
         cycle_time_ns = (cycle_end.tv_sec - cycle_start.tv_sec) * NSEC_PER_SEC +
                        (cycle_end.tv_nsec - cycle_start.tv_nsec);
         
-        if (cycle_time_ns > cycletime * 1.5) {
-            printf("WARNING: Cycle time exceeded: %ld ns (expected: %ld ns)\n", 
+        if (cycle_time_ns > cycletime * 2 && dorun % 1000 == 0) {
+            printf("警告：周期时间超限：%ld ns（期望：%ld ns）\n",
                    cycle_time_ns, cycletime);
         }
     }

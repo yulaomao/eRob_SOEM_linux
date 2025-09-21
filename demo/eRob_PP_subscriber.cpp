@@ -28,10 +28,6 @@
 
 #include <sched.h>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-
 // Global variables for EtherCAT communication
 char IOmap[4096]; // I/O mapping for EtherCAT
 int expectedWKC; // Expected Work Counter
@@ -85,12 +81,6 @@ typedef struct {
     int16_t actual_torque;    // 0x6077:0, 16 bits
 } __attribute__((__packed__)) txpdo_t;
 
-// Add these global variables after the other global declarations
-volatile int target_position = 0;
-pthread_mutex_t target_position_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t target_position_cond = PTHREAD_COND_INITIALIZER;
-bool target_position_updated = false;
-
 // 在文件开头的全局变量声明部分添加
 rxpdo_t rxpdo;  // 全局变量，用于发送到从站
 txpdo_t txpdo;  // 全局变量，用于从从站接收
@@ -137,7 +127,7 @@ int erob_test() {
     // 1. Call ec_config_init() to move from INIT to PRE-OP state.
     printf("__________STEP 1___________________\n");
     // Initialize EtherCAT master on the specified network interface
-    if (ec_init("enp6s0") <= 0) {
+    if (ec_init("enp3s0") <= 0) {
         printf("Error: Could not initialize EtherCAT master!\n");
         printf("No socket connection on Ethernet port. Execute as root.\n");
         printf("___________________________________________\n");
@@ -463,13 +453,14 @@ int erob_test() {
         // 记录开始时间
         auto start = std::chrono::high_resolution_clock::now();
         int step = 0;
+        int32_t target_position_5_degrees = (int32_t)(5.0 / Cnt_to_deg); // 5度对应的counts
 
-        // 主循环
-        for(i = 1; i <= 3 * 60 * 60 * 1000; i++) {
+        printf("Target position for 5 degrees: %d counts\n", target_position_5_degrees);
+
+        // 主循环 - 只运行足够长时间完成运动
+        for(i = 1; i <= 10000; i++) {
             ec_send_processdata();
             wkc = ec_receive_processdata(EC_TIMEOUTRET);
-
-            
 
             // Send output data to each slave
             for (int slave = 1; slave <= ec_slavecount; slave++) {
@@ -485,7 +476,7 @@ int erob_test() {
                         // Print received data
                         printf("Slave %d:\n", slave);
                         printf("  Status Word: 0x%04x\n", txpdo.statusword);
-                        printf("  Position: %d\n", txpdo.actual_position);
+                        printf("  Position: %d (Target: %d)\n", txpdo.actual_position, target_position_5_degrees);
                         printf("  Velocity: %d\n", txpdo.actual_velocity);
                         printf("  Torque: %d\n", txpdo.actual_torque);
                         
@@ -502,70 +493,65 @@ int erob_test() {
                         printf("\n");
                     }
                     printf("----------------------------------------\n");
-                    
                 }
                 needlf = TRUE;
 
-           if (step <= 200) {
-                // Initial state
-                rxpdo.controlword = 0x0080;
-                rxpdo.target_position = 0;
-                rxpdo.mode_of_operation = 1;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 300) {
-                // Shutdown command
-                rxpdo.controlword = 0x0006;
-                rxpdo.target_position = 0;
-                rxpdo.mode_of_operation = 1;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 400) {
-                // Switch On command
-                rxpdo.controlword = 0x0007;
-                rxpdo.target_position = 0;
-                rxpdo.mode_of_operation = 1;
-                rxpdo.padding = 0;
-            }
-            else if (step <= 500) {
-                // Enable Operation command
-                rxpdo.controlword = 0x000F;
-                rxpdo.target_position = 0;
-                rxpdo.mode_of_operation = 1;
-                rxpdo.padding = 0;
-            }
-            else {
-                // Normal operation with position control
-                update_motor_status(SLAVE_ID);  // 添加电机状态更新
-                
-                pthread_mutex_lock(&target_position_mutex);
-                
-                if (step > 800) {
-                    static bool new_setpoint = false;
-                    static uint16_t control_toggle = 0x0000;
-                    
+                if (step <= 200) {
+                    // Initial state
+                    rxpdo.controlword = 0x0080;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 1;
+                    rxpdo.padding = 0;
+                }
+                else if (step <= 300) {
+                    // Shutdown command
+                    rxpdo.controlword = 0x0006;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 1;
+                    rxpdo.padding = 0;
+                }
+                else if (step <= 400) {
+                    // Switch On command
+                    rxpdo.controlword = 0x0007;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 1;
+                    rxpdo.padding = 0;
+                }
+                else if (step <= 500) {
+                    // Enable Operation command
+                    rxpdo.controlword = 0x000F;
+                    rxpdo.target_position = 0;
+                    rxpdo.mode_of_operation = 1;
+                    rxpdo.padding = 0;
+                }
+                else if (step <= 800) {
+                    // 设置目标位置到5度并触发运动
                     rxpdo.mode_of_operation = 1;  // PP模式
+                    rxpdo.target_position = target_position_5_degrees;
+                    rxpdo.controlword = 0x001F; // Enable + new setpoint
                     rxpdo.padding = 0;
                     
-                    if (target_position_updated) {
-                        // 收到新的目标位置
-                        rxpdo.target_position = target_position;
-                        new_setpoint = true;
-                        control_toggle ^= 0x0040;  // 切换控制位
-                        target_position_updated = false;
-                        printf(">>> Received new target position: %d\n", target_position);
+                    if (step == 501) {
+                        printf(">>> Starting motion to 5 degrees (position: %d)\n", target_position_5_degrees);
                     }
-
-                    if (new_setpoint) {
-                        // 设置新位置触发位和绝对位置位
-                        rxpdo.controlword = 0x000F | 0x0010 | control_toggle;  // Enable + new setpoint + toggle bit
-                        printf(">>> Triggering motion with control word: 0x%04x\n", rxpdo.controlword);
-                        new_setpoint = false;
-                    } else {
-                        // 保持使能状态
-                        rxpdo.controlword = 0x000F | control_toggle;
+                }
+                else {
+                    // 保持位置并检查是否到达目标
+                    update_motor_status(SLAVE_ID);
+                    
+                    rxpdo.mode_of_operation = 1;
+                    rxpdo.target_position = target_position_5_degrees;
+                    rxpdo.controlword = 0x000F; // 保持使能状态
+                    rxpdo.padding = 0;
+                    
+                    // 检查是否到达目标位置
+                    int position_error = abs(txpdo.actual_position - target_position_5_degrees);
+                    if (position_error < 50 && abs(txpdo.actual_velocity) < 50) {
+                        printf(">>> Target position reached! Position error: %d counts\n", position_error);
+                        printf(">>> Motion completed. Shutting down...\n");
+                        break; // 退出循环
                     }
-
+                    
                     // 添加调试信息
                     if (i % 1000 == 0) {
                         printf("\n--- Motion Status Update ---\n");
@@ -573,13 +559,11 @@ int erob_test() {
                         printf("Actual Position: %d\n", txpdo.actual_position);
                         printf("Control Word: 0x%04x\n", rxpdo.controlword);
                         printf("Status Word: 0x%04x\n", txpdo.statusword);
-                        printf("Position Error: %d\n", rxpdo.target_position - txpdo.actual_position);
+                        printf("Position Error: %d\n", position_error);
+                        printf("Velocity: %d\n", txpdo.actual_velocity);
                         printf("-------------------------\n\n");
                     }
                 }
-                
-                pthread_mutex_unlock(&target_position_mutex);
-            }
             }
 
             if(step < 900) {
@@ -755,149 +739,6 @@ int incorrect_count = 0;
 int test_count_sum = 100;
 int test_count = 0;
 float correct_rate = 0;
-
-// 轨迹生成函数
-struct TrajectoryPoint {
-    int32_t position;
-    int32_t velocity;
-    bool reached;
-};
-
-TrajectoryPoint generate_position_trajectory(
-    int32_t current_pos,    // 当前位置
-    int32_t target_pos,     // 目标位置
-    int32_t current_vel,    // 当前速度
-    int32_t max_vel,        // 最大速度限制
-    int32_t decel,          // 减速度
-    double cycle_time_ms)   // 周期时间(ms)
-{
-    TrajectoryPoint tp;
-    double dt = cycle_time_ms / 1000.0;  // 转换为秒
-    
-    // 计算到目标的距离
-    int32_t distance = target_pos - current_pos;
-    
-    // 计算减速所需的距离
-    double stop_distance = (current_vel * current_vel) / (2.0 * decel);
-    
-    // 判断是否需要开始减速
-    if (abs(distance) <= stop_distance) {
-        // 需要减速
-        int32_t new_vel = (int32_t)(sqrt(2.0 * decel * abs(distance)));
-        if (distance < 0) new_vel = -new_vel;
-        
-        // 应用减速度
-        if (abs(current_vel) > abs(new_vel)) {
-            tp.velocity = new_vel;
-        } else {
-            tp.velocity = current_vel;
-        }
-    } else {
-        // 可以加速或匀速
-        if (abs(current_vel) < max_vel) {
-            // 加速
-            tp.velocity = current_vel + (int32_t)(decel * dt * (distance > 0 ? 1 : -1));
-            if (abs(tp.velocity) > max_vel) {
-                tp.velocity = max_vel * (distance > 0 ? 1 : -1);
-            }
-        } else {
-            // 匀速
-            tp.velocity = max_vel * (distance > 0 ? 1 : -1);
-        }
-    }
-    
-    // 计算新位置
-    tp.position = current_pos + (int32_t)(tp.velocity * dt);
-    
-    // 判断是否到达目标
-    tp.reached = (abs(distance) < 10) && (abs(tp.velocity) < 10);
-    
-    return tp;
-}
-
-// Add the server function before erob_test()
-void* start_server(void* arg) {
-    int port = *(int*)arg;
-    int server_fd, new_socket;
-    struct sockaddr_in address;
-    int opt = 1;
-    int addrlen = sizeof(address);
-    char buffer[1024] = {0};
-
-    // Create socket
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        std::cerr << "Socket creation failed" << std::endl;
-        return nullptr;
-    }
-
-    // Set socket options
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        std::cerr << "Failed to set socket options" << std::endl;
-        return nullptr;
-    }
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port);
-
-    // Bind socket
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        std::cerr << "Binding failed" << std::endl;
-        return nullptr;
-    }
-
-    // Listen for connections
-    if (listen(server_fd, 3) < 0) {
-        std::cerr << "Listening failed" << std::endl;
-        return nullptr;
-    }
-
-    std::cout << "Waiting for connection..." << std::endl;
-    if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
-        std::cerr << "Failed to accept connection" << std::endl;
-        return nullptr;
-    }
-
-    // Receive data
-    static time_t last_print_time = 0;
-    while (true) {
-        int valread = read(new_socket, buffer, 1024);
-        if (valread > 0) {
-            try {
-                int new_target = std::stoi(buffer);
-                pthread_mutex_lock(&target_position_mutex);
-                target_position = new_target;
-                target_position_updated = true;
-                pthread_cond_signal(&target_position_cond);
-                
-                // 添加更详细的调试信息
-                std::cout << "Received data: " << buffer << std::endl;
-                std::cout << "Converted target position: " << new_target << std::endl;
-                std::cout << "Current actual position: " << txpdo.actual_position << std::endl;
-                std::cout << "Control word: 0x" << std::hex << rxpdo.controlword << std::dec << std::endl;
-                
-                pthread_mutex_unlock(&target_position_mutex);
-            } catch (const std::exception& e) {
-                std::cerr << "Data conversion error: " << e.what() << std::endl;
-                std::cerr << "Received buffer content: " << buffer << std::endl;
-            }
-            memset(buffer, 0, sizeof(buffer));
-        }
-
-        time_t current_time = time(NULL);
-        if (current_time - last_print_time >= 5) {  // Print every 5 seconds
-            pthread_mutex_lock(&target_position_mutex);
-            printf("Server thread: current target_position = %d\n", target_position);
-            pthread_mutex_unlock(&target_position_mutex);
-            last_print_time = current_time;
-        }
-    }
-
-    close(new_socket);
-    close(server_fd);
-    return nullptr;
-}
-
-// Modify the main function to start the server thread
 int main(int argc, char **argv) {
     needlf = FALSE;
     inOP = FALSE;
@@ -915,16 +756,12 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // Start the server thread
-    pthread_t server_thread;
-    int port = 8080;  // You can change this port number
-    if (pthread_create(&server_thread, NULL, start_server, &port) != 0) {
-        std::cerr << "Failed to create server thread" << std::endl;
-        return EXIT_FAILURE;
-    }
-
     printf("Running on CPU core 3\n");
+    printf("Starting motor control - moving to 5 degrees\n");
+    
     erob_test();
+    
+    printf("Motor control completed\n");
     printf("End program\n");
 
     return EXIT_SUCCESS;
