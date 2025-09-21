@@ -118,17 +118,22 @@ int main(int argc, char* argv[]) {
                 int32_t initial_pos = controller.getMotorPosition(motor_id);
                 std::cout << "Initial position: " << initial_pos << std::endl;
                 
-                // 随动测试：每16ms根据正弦速度积分出目标位置（v_max=30000），分段随机反向/减速
-                std::cout << "Executing CSP follow: sine-wave velocity -> position (v_max=30000), random reversals..." << std::endl;
+                // 随动测试：每16ms根据正弦速度积分出目标位置（v_max=30000），分段随机反向/减速，且限制在±90度范围内
+                std::cout << "Executing CSP follow: sine-wave velocity (v_max=30000), random reversals, limited to ±90deg around start..." << std::endl;
 
                 const int update_ms = 16;              // 目标更新周期，与控制器内部16段插补一致
                 const double dt = update_ms / 1000.0;  // 每步时间(s)
-                const double v_max = 60000.0;          // 最大速度(计数/秒)
+                const double v_max = 30000.0;          // 最大速度(计数/秒)
                 const double pi = 3.14159265358979323846;
 
                 // 期望位置（相对初始位置，单位：计数）及小数残差用于量化
                 int64_t pos_des_counts = 0;
                 double residual = 0.0;
+
+                // 软限位：初始位置±90度
+                const int32_t range_90 = ERobMotorController::angleToCounts(90.0);
+                const int32_t soft_min = initial_pos - range_90;
+                const int32_t soft_max = initial_pos + range_90;
 
                 // 随机段生成器：半正弦速度段，频繁反向
                 std::mt19937 rng(static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -174,9 +179,32 @@ int main(int argc, char* argv[]) {
                     residual = delta_counts_d - static_cast<double>(delta_counts);
                     pos_des_counts += delta_counts;
 
-                    // 目标为初始位置 + 期望相对位移
-                    int32_t target = static_cast<int32_t>(initial_pos + pos_des_counts);
+                    // 目标为初始位置 + 期望相对位移，并施加±90度软限位
+                    int64_t abs_target = static_cast<int64_t>(initial_pos) + pos_des_counts;
+                    bool hit_boundary = false;
+                    if (abs_target < soft_min) {
+                        abs_target = soft_min;
+                        pos_des_counts = static_cast<int64_t>(soft_min) - static_cast<int64_t>(initial_pos);
+                        residual = 0.0;
+                        seg_dir = +1;   // 反向
+                        hit_boundary = true;
+                    } else if (abs_target > soft_max) {
+                        abs_target = soft_max;
+                        pos_des_counts = static_cast<int64_t>(soft_max) - static_cast<int64_t>(initial_pos);
+                        residual = 0.0;
+                        seg_dir = -1;   // 反向
+                        hit_boundary = true;
+                    }
+
+                    int32_t target = static_cast<int32_t>(abs_target);
                     controller.setCSPTargetPosition(motor_id, target);
+
+                    if (hit_boundary) {
+                        // 到边界后重启一个速度段，避免长时间贴边
+                        seg_start = std::chrono::steady_clock::now();
+                        seg_T = dur_dist(rng);
+                        seg_A = amp_scale_dist(rng) * v_max;
+                    }
 
                     if (i % 20 == 0) {
                         int32_t current = controller.getMotorPosition(motor_id);
