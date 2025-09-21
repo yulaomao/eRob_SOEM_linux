@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <vector>
+#include <random>
 
 int main(int argc, char* argv[]) {
     // 检查命令行参数
@@ -68,109 +69,130 @@ int main(int argc, char* argv[]) {
         // 等待电机使能完成
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        // 示例3: 单步位置控制 (PP模式)
-        if (motor_count > 0) {
-            std::cout << "\n===== Example 3: Position Control (PP Mode) =====" << std::endl;
+        // // 示例3: 单步位置控制 (PP模式)
+        // if (motor_count > 0) {
+        //     std::cout << "\n===== Example 3: Position Control (PP Mode) =====" << std::endl;
             
-            int motor_id = 0;  // 使用第一个电机
-            int32_t current_pos = controller.getMotorPosition(motor_id);
-            int32_t target_pos = current_pos + ERobMotorController::angleToCounts(90.0);  // 移动90度
-            target_pos = 0;
-            int32_t velocity = 15000;  // 速度
+        //     int motor_id = 0;  // 使用第一个电机
+        //     int32_t current_pos = controller.getMotorPosition(motor_id);
+        //     int32_t target_pos = current_pos + ERobMotorController::angleToCounts(90.0);  // 移动90度
+        //     target_pos = 0;
+        //     int32_t velocity = 15000;  // 速度
 
-            std::cout << "Moving motor " << motor_id << " from " << current_pos 
-                      << " to " << target_pos << " at velocity " << velocity << std::endl;
+        //     std::cout << "Moving motor " << motor_id << " from " << current_pos 
+        //               << " to " << target_pos << " at velocity " << velocity << std::endl;
 
-            if (controller.moveToPosition(motor_id, target_pos, velocity, false)) {
-                std::cout << "Position command sent successfully" << std::endl;
+        //     if (controller.moveToPosition(motor_id, target_pos, velocity, false)) {
+        //         std::cout << "Position command sent successfully" << std::endl;
                 
-                // 等待运动完成
-                std::cout << "Waiting for movement to complete..." << std::endl;
-                int timeout = 200;  // 20秒超时
-                while (timeout-- > 0) {
-                    if (controller.isMotorAtTarget(motor_id, 100)) {
-                        std::cout << "Motor reached target position!" << std::endl;
-                        break;
-                    }
-                    std::cout << "Current position: " << controller.getMotorPosition(motor_id) 
-                              << ", Target: " << target_pos << std::endl;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
+        //         // 等待运动完成
+        //         std::cout << "Waiting for movement to complete..." << std::endl;
+        //         int timeout = 200;  // 20秒超时
+        //         while (timeout-- > 0) {
+        //             if (controller.isMotorAtTarget(motor_id, 100)) {
+        //                 std::cout << "Motor reached target position!" << std::endl;
+        //                 break;
+        //             }
+        //             std::cout << "Current position: " << controller.getMotorPosition(motor_id) 
+        //                       << ", Target: " << target_pos << std::endl;
+        //             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        //         }
                 
-                if (timeout <= 0) {
-                    std::cout << "Movement timeout!" << std::endl;
-                }
-            }
-        }
+        //         if (timeout <= 0) {
+        //             std::cout << "Movement timeout!" << std::endl;
+        //         }
+        //     }
+        // }
 
         // 示例4: CSP随动控制
         if (motor_count > 0) {
             std::cout << "\n===== Example 4: CSP Follow Control =====" << std::endl;
-            
-            int motor_id = 0;  // 使用第一个电机
-            
+
+            int motor_id = 1;  // 使用第二个电机
+
             // 启用CSP随动模式
             if (controller.enableCSPFollow(motor_id, true)) {
                 std::cout << "CSP follow mode enabled for motor " << motor_id << std::endl;
-                
-                // 设置运动参数（适合视觉伺服）
-                controller.setCSPMotionParams(motor_id, 15000, 30000);  // 最大速度15000, 最大加速度30000
-                
-                // 设置平滑参数（减少震动和超调）
-                controller.setCSPSmoothParams(motor_id, 100000.0, 0.008, 0.008);  // jerk_limit, acc_time, dec_time
                 
                 // 获取初始位置
                 int32_t initial_pos = controller.getMotorPosition(motor_id);
                 std::cout << "Initial position: " << initial_pos << std::endl;
                 
-                // 模拟视觉伺服场景：16ms周期更新目标位置
-                std::cout << "Executing visual servo CSP movements (16ms cycle)..." << std::endl;
-                
-                // 运动序列: 模拟视觉跟踪目标的运动轨迹
-                std::vector<int32_t> target_positions;
-                int32_t amplitude = ERobMotorController::angleToCounts(60.0);  // 60度幅度
-                
-                // 生成正弦波轨迹（模拟目标运动）
-                for (int i = 0; i <= 100; i++) {
-                    double angle = i * 2.0 * M_PI / 50.0;  // 2个周期
-                    int32_t target = initial_pos + static_cast<int32_t>(amplitude * sin(angle));
-                    target_positions.push_back(target);
-                }
-                
-                // 执行视觉伺服测试：精确的16ms周期目标更新
+                // 随动测试：每16ms根据正弦速度积分出目标位置（v_max=30000），分段随机反向/减速
+                std::cout << "Executing CSP follow: sine-wave velocity -> position (v_max=30000), random reversals..." << std::endl;
+
+                const int update_ms = 16;              // 目标更新周期，与控制器内部16段插补一致
+                const double dt = update_ms / 1000.0;  // 每步时间(s)
+                const double v_max = 60000.0;          // 最大速度(计数/秒)
+                const double pi = 3.14159265358979323846;
+
+                // 期望位置（相对初始位置，单位：计数）及小数残差用于量化
+                int64_t pos_des_counts = 0;
+                double residual = 0.0;
+
+                // 随机段生成器：半正弦速度段，频繁反向
+                std::mt19937 rng(static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count()));
+                std::uniform_real_distribution<double> dur_dist(0.6, 1.8);     // 段时长T[s]
+                std::uniform_real_distribution<double> amp_scale_dist(0.5, 1.0); // 幅值比例
+                std::bernoulli_distribution reverse_prob(0.7);                 // 70% 概率反向
+
+                // 当前段状态
+                double seg_T = dur_dist(rng);
+                double seg_A = amp_scale_dist(rng) * v_max;  // 峰值速度
+                int seg_dir = 1;  // 初始方向
+                auto seg_start = std::chrono::steady_clock::now();
+
                 auto start_time = std::chrono::steady_clock::now();
-                
-                for (size_t i = 0; i < target_positions.size(); i++) {
-                    int32_t target = target_positions[i];
-                    
-                    // 16ms精确周期更新目标位置
-                    auto target_time = start_time + std::chrono::milliseconds(i * 16);
+                const int total_steps = 1500; // 约24秒（1500*16ms）
+                for (int i = 0; i < total_steps; i++) {
+                    auto target_time = start_time + std::chrono::milliseconds(i * update_ms);
                     std::this_thread::sleep_until(target_time);
-                    
+
+                    // 如到达段末，开启新段（优先反向以体现随机减速/反向）
+                    double t_seg = std::chrono::duration<double>(std::chrono::steady_clock::now() - seg_start).count();
+                    if (t_seg >= seg_T) {
+                        // 选择新方向：大概率反向，小概率保持
+                        if (reverse_prob(rng)) seg_dir = -seg_dir;
+                        // 更新段参数
+                        seg_T = dur_dist(rng);
+                        seg_A = amp_scale_dist(rng) * v_max;
+                        seg_start = std::chrono::steady_clock::now();
+                        t_seg = 0.0;
+                    }
+
+                    // 半正弦速度：0->A->0，带方向
+                    double phase = (t_seg / seg_T);
+                    if (phase > 1.0) phase = 1.0; // 保护
+                    double v_des = seg_dir * seg_A * std::sin(pi * phase);
+                    // 限幅以确保不超过目标最大速度
+                    if (v_des > v_max) v_des = v_max;
+                    if (v_des < -v_max) v_des = -v_max;
+
+                    // 位置积分（带残差的整数量化）
+                    double delta_counts_d = v_des * dt + residual;
+                    long delta_counts = static_cast<long>(std::llround(delta_counts_d));
+                    residual = delta_counts_d - static_cast<double>(delta_counts);
+                    pos_des_counts += delta_counts;
+
+                    // 目标为初始位置 + 期望相对位移
+                    int32_t target = static_cast<int32_t>(initial_pos + pos_des_counts);
                     controller.setCSPTargetPosition(motor_id, target);
-                    
-                    // 每20个点显示一次状态
+
                     if (i % 20 == 0) {
                         int32_t current = controller.getMotorPosition(motor_id);
                         int32_t velocity = controller.getMotorVelocity(motor_id);
-                        std::cout << "Step " << i << " - Target: " << target 
-                                  << ", Current: " << current 
-                                  << ", Velocity: " << velocity << std::endl;
+                        std::cout << "Step " << i
+                                  << " - v_des: " << static_cast<int>(v_des)
+                                  << ", pos_des: " << pos_des_counts
+                                  << ", Target: " << target
+                                  << ", Current: " << current
+                                  << ", Vel(feedback): " << velocity
+                                  << std::endl;
                     }
                 }
-                
-                std::cout << "Visual servo test completed, holding final position for 2 seconds..." << std::endl;
+
+                std::cout << "Follow test completed, holding final position for 2 seconds..." << std::endl;
                 std::this_thread::sleep_for(std::chrono::seconds(2));
-                
-                // 最终状态检查
-                int32_t final_pos = controller.getMotorPosition(motor_id);
-                int32_t final_target = target_positions.back();
-                int32_t final_error = std::abs(final_pos - final_target);
-                
-                std::cout << "Final position check:" << std::endl;
-                std::cout << "  Target: " << final_target << " (" << ERobMotorController::countsToAngle(final_target) << " deg)" << std::endl;
-                std::cout << "  Actual: " << final_pos << " (" << ERobMotorController::countsToAngle(final_pos) << " deg)" << std::endl;
-                std::cout << "  Error:  " << final_error << " counts (" << ERobMotorController::countsToAngle(final_error) << " deg)" << std::endl;
                 
                 // 禁用CSP随动模式
                 controller.enableCSPFollow(motor_id, false);
@@ -178,57 +200,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 示例5: 多电机协调运动
-        if (motor_count > 1) {
-            std::cout << "\n===== Example 5: Multi-Motor Coordination =====" << std::endl;
-            
-            // 同时启用多个电机的CSP模式
-            std::vector<int32_t> initial_positions(motor_count);
-            for (int i = 0; i < std::min(motor_count, 3); i++) {  // 最多控制3个电机
-                initial_positions[i] = controller.getMotorPosition(i);
-                controller.enableCSPFollow(i, true);
-                controller.setCSPMotionParams(i, 1500, 2000);
-                std::cout << "Motor " << i << " initial position: " << initial_positions[i] << std::endl;
-            }
-            
-            // 协调运动: 所有电机同时运动到不同位置
-            std::cout << "Coordinated movement started..." << std::endl;
-            for (int i = 0; i < std::min(motor_count, 3); i++) {
-                int32_t target = initial_positions[i] + ERobMotorController::angleToCounts(30.0 * (i + 1));
-                controller.setCSPTargetPosition(i, target);
-                std::cout << "Motor " << i << " target set to: " << target << std::endl;
-            }
-            
-            // 监控运动过程
-            for (int step = 0; step < 100; step++) {  // 10秒监控
-                std::cout << "Step " << step << ": ";
-                bool all_close = true;
-                
-                for (int i = 0; i < std::min(motor_count, 3); i++) {
-                    int32_t current = controller.getMotorPosition(i);
-                    int32_t target = initial_positions[i] + ERobMotorController::angleToCounts(30.0 * (i + 1));
-                    int32_t error = std::abs(current - target);
-                    
-                    std::cout << "M" << i << ":" << current << "(" << error << ") ";
-                    
-                    if (error > 200) all_close = false;
-                }
-                std::cout << std::endl;
-                
-                if (all_close) {
-                    std::cout << "All motors reached targets!" << std::endl;
-                    break;
-                }
-                
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-            
-            // 禁用CSP模式
-            for (int i = 0; i < std::min(motor_count, 3); i++) {
-                controller.enableCSPFollow(i, false);
-            }
-        }
-
+    
         std::cout << "\n===== Example Completed Successfully =====" << std::endl;
 
     } catch (const std::exception& e) {

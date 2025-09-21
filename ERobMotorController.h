@@ -79,35 +79,16 @@ struct MotorInfo {
                   status_word(0), target_position(0), target_velocity(0) {}
 };
 
-// CSP模式随动控制参数（视觉伺服优化）
+// CSP模式随动控制参数（简化版）
 struct CSPFollowParams {
-    bool enabled;                    // 是否启用随动
-    int32_t initial_position;        // 初始目标位置
-    int32_t current_target;          // 当前目标位置
-    int32_t previous_target;         // 上一个周期的目标位置
-    int32_t planned_position;        // 规划的中间位置
-    int32_t max_velocity;            // 最大速度 (counts/s)
-    int32_t max_acceleration;        // 最大加速度 (counts/s²)
-    double current_velocity;         // 当前规划速度 (counts/s)
-    double target_velocity;          // 目标速度 (counts/s)
-    std::chrono::steady_clock::time_point last_update; // 上次更新时间
-    std::chrono::steady_clock::time_point cycle_start; // 当前周期开始时间
-    int32_t cycle_start_position;    // 周期开始时的位置
-    double cycle_time_s;             // 周期时间（秒）
-    bool new_target_received;        // 是否收到新目标
-    
-    // 运动平滑参数
-    double acceleration_time;        // 加速时间 (s)
-    double deceleration_time;        // 减速时间 (s)
-    double jerk_limit;               // 加加速度限制 (counts/s³)
-    
-    CSPFollowParams() : enabled(false), initial_position(0), current_target(0),
-                       previous_target(0), planned_position(0),
-                       max_velocity(5000), max_acceleration(10000),
-                       current_velocity(0.0), target_velocity(0.0),
-                       cycle_start_position(0), cycle_time_s(0.016),
-                       new_target_received(false), acceleration_time(0.008),
-                       deceleration_time(0.008), jerk_limit(50000.0) {}
+    bool enabled;            // 是否启用随动
+    int32_t current_target;  // 当前目标位置
+    int32_t segment_base_position; // 每16个周期的基准位置
+    int segment_tick;        // 0..15 周期计数
+    double step_residual;    // 步长小数残差，用于累积避免取整损失
+    double v_cmd;            // 内部指令速度（counts/s），用于限加速度积分
+
+    CSPFollowParams() : enabled(false), current_target(0), segment_base_position(0), segment_tick(0), step_residual(0.0), v_cmd(0.0) {}
 };
 
 /**
@@ -232,17 +213,7 @@ public:
      * @param max_acceleration 最大加速度
      * @return true 成功，false 失败
      */
-    bool setCSPMotionParams(int motor_id, int32_t max_velocity, int32_t max_acceleration);
-    
-    /**
-     * @brief 设置CSP模式的平滑参数
-     * @param motor_id 电机ID（从0开始）
-     * @param jerk_limit 加加速度限制
-     * @param acceleration_time 加速时间
-     * @param deceleration_time 减速时间
-     * @return true 成功，false 失败
-     */
-    bool setCSPSmoothParams(int motor_id, double jerk_limit, double acceleration_time, double deceleration_time);
+    // 已弃用的CSP参数接口移除
 
     // 实用工具函数
     /**
@@ -278,7 +249,6 @@ private:
     // 线程管理
     std::thread realtime_thread_;
     std::thread check_thread_;
-    std::thread csp_follow_thread_;
     mutable std::mutex motor_data_mutex_;
     
     // 时钟同步
@@ -292,7 +262,6 @@ private:
     bool transitionToOperational();
     void realtimeLoop();
     void checkLoop();
-    void cspFollowLoop();
     
     void updateMotorStatus(int motor_id);
     MotorState parseStatusWord(uint16_t status_word) const;
@@ -305,21 +274,11 @@ private:
     bool isValidMotorId(int motor_id) const;
     int32_t calculateCSPInterpolatedPosition(int motor_id);
     
-    // 视觉伺服运动规划方法
-    int32_t calculateReachablePosition(int motor_id, int32_t target_position, double cycle_time_s);
-    double calculateTrapezoidalVelocity(double current_pos, double target_pos, double current_vel, 
-                                      double max_vel, double max_acc, double cycle_time);
-    double applySmoothAcceleration(double current_vel, double target_vel, double max_acc, 
-                                 double jerk_limit, double cycle_time);
-    void updateCSPCycleParameters(int motor_id);
-    
     // 常量定义
     static constexpr double CNT_TO_DEG = 0.000686645;  // 计数到角度转换系数
-    static constexpr int32_t MAX_VELOCITY = 30000;     // 最大速度
-    static constexpr int32_t MAX_ACCELERATION = 50000; // 最大加速度
+    static constexpr int32_t MAX_VELOCITY = 50000;     // 最大速度 (counts/s) 与0x6080保持一致
+    static constexpr int32_t MAX_ACCELERATION = 130000; // 最大加速度 (counts/s^2) 与0x60C5一致
     static constexpr int NSEC_PER_SEC = 1000000000;    // 每秒纳秒数
-    static constexpr int EC_TIMEOUTMON = 5000;          // 监控超时
-    static constexpr int CSP_FOLLOW_UPDATE_MS = 16;     // CSP随动更新间隔(ms)
 };
 
 #endif // EROB_MOTOR_CONTROLLER_H

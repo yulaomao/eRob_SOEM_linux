@@ -17,8 +17,6 @@ constexpr double ERobMotorController::CNT_TO_DEG;
 constexpr int32_t ERobMotorController::MAX_VELOCITY;
 constexpr int32_t ERobMotorController::MAX_ACCELERATION;
 constexpr int ERobMotorController::NSEC_PER_SEC;
-constexpr int ERobMotorController::EC_TIMEOUTMON;
-constexpr int ERobMotorController::CSP_FOLLOW_UPDATE_MS;
 
 ERobMotorController::ERobMotorController(const std::string& interface_name, int cycle_time_us)
     : interface_name_(interface_name)
@@ -70,34 +68,24 @@ bool ERobMotorController::initialize() {
     // 初始化电机信息
     motors_.resize(ec_slavecount);
     csp_params_.resize(ec_slavecount);
-    
+
     for (int i = 0; i < ec_slavecount; i++) {
         motors_[i].slave_id = i + 1;  // EtherCAT从站ID从1开始
         motors_[i].name = ec_slave[i + 1].name;
         motors_[i].state = MotorState::NOT_READY_TO_SWITCH_ON;
         motors_[i].current_mode = MotorControlMode::CSV;
         motors_[i].is_enabled = false;
-        
-        // 初始化CSP参数
+
+        // 初始化CSP参数（简化）
         csp_params_[i].enabled = false;
-        csp_params_[i].initial_position = 0;
         csp_params_[i].current_target = 0;
-        csp_params_[i].previous_target = 0;
-        csp_params_[i].planned_position = 0;
-        csp_params_[i].max_velocity = 5000;
-        csp_params_[i].max_acceleration = 5000;
-        csp_params_[i].current_velocity = 0.0;
-        csp_params_[i].target_velocity = 0.0;
-        csp_params_[i].cycle_start_position = 0;
-        csp_params_[i].cycle_time_s = 0.016;
-        csp_params_[i].new_target_received = false;
     }
 
     // 启动实时线程
     running_ = true;
     realtime_thread_ = std::thread(&ERobMotorController::realtimeLoop, this);
     check_thread_ = std::thread(&ERobMotorController::checkLoop, this);
-    csp_follow_thread_ = std::thread(&ERobMotorController::cspFollowLoop, this);
+    // 简化随动后不再需要独立随动线程
 
     initialized_ = true;
     std::cout << "Motor controller initialized successfully with " << ec_slavecount << " motors" << std::endl;
@@ -117,9 +105,7 @@ void ERobMotorController::shutdown() {
     if (check_thread_.joinable()) {
         check_thread_.join();
     }
-    if (csp_follow_thread_.joinable()) {
-        csp_follow_thread_.join();
-    }
+    // 无随动线程需回收
 
     // 禁能所有电机
     enableAllMotors(false);
@@ -320,12 +306,40 @@ bool ERobMotorController::transitionToOperational() {
     expected_wkc_ = (ec_group[0].outputsWKC * 2) + ec_group[0].inputsWKC;
     std::cout << "Expected work counter: " << expected_wkc_ << std::endl;
 
-    // 在SAFE_OP状态下预配置操作模式
+    // 在SAFE_OP状态下预配置操作模式与基础SDO参数
     uint8_t operation_mode_csv = 9;  // CSV模式
     for (int i = 1; i <= ec_slavecount; i++) {
         int ret = ec_SDOwrite(i, 0x6060, 0x00, FALSE, sizeof(operation_mode_csv), &operation_mode_csv, EC_TIMEOUTSAFE);
         if (ret <= 0) {
             std::cout << "Warning: Failed to preset operation mode for slave " << i << std::endl;
+        }
+
+        // 基础限制与PP默认参数
+        int32_t max_velocity = 50000;      // 0x6080: Max profile velocity
+        int32_t max_acceleration = 130000;  // 0x60C5: Max acceleration
+        int32_t prof_velocity = 15000;     // 0x6081: Profile velocity
+        int32_t prof_accel = 10000;        // 0x6083: Profile acceleration
+        int32_t prof_decel = 10000;        // 0x6084: Profile deceleration
+
+        ret = ec_SDOwrite(i, 0x6080, 0x00, FALSE, sizeof(max_velocity), &max_velocity, EC_TIMEOUTSAFE);
+        if (ret <= 0) {
+            std::cout << "Warning: Failed to write 0x6080 (Max velocity) for slave " << i << std::endl;
+        }
+        ret = ec_SDOwrite(i, 0x60C5, 0x00, FALSE, sizeof(max_acceleration), &max_acceleration, EC_TIMEOUTSAFE);
+        if (ret <= 0) {
+            std::cout << "Warning: Failed to write 0x60C5 (Max acceleration) for slave " << i << std::endl;
+        }
+        ret = ec_SDOwrite(i, 0x6081, 0x00, FALSE, sizeof(prof_velocity), &prof_velocity, EC_TIMEOUTSAFE);
+        if (ret <= 0) {
+            std::cout << "Warning: Failed to write 0x6081 (Profile velocity) for slave " << i << std::endl;
+        }
+        ret = ec_SDOwrite(i, 0x6083, 0x00, FALSE, sizeof(prof_accel), &prof_accel, EC_TIMEOUTSAFE);
+        if (ret <= 0) {
+            std::cout << "Warning: Failed to write 0x6083 (Profile acceleration) for slave " << i << std::endl;
+        }
+        ret = ec_SDOwrite(i, 0x6084, 0x00, FALSE, sizeof(prof_decel), &prof_decel, EC_TIMEOUTSAFE);
+        if (ret <= 0) {
+            std::cout << "Warning: Failed to write 0x6084 (Profile deceleration) for slave " << i << std::endl;
         }
     }
 
@@ -677,19 +691,14 @@ bool ERobMotorController::enableCSPFollow(int motor_id, bool enable) {
         // 切换到CSP模式
         motors_[motor_id].current_mode = MotorControlMode::CSP;
         
-        // 初始化CSP参数
-        auto& csp = csp_params_[motor_id];
-        csp.enabled = true;
-        csp.initial_position = motors_[motor_id].actual_position;
-        csp.current_target = motors_[motor_id].actual_position;
-        csp.previous_target = motors_[motor_id].actual_position;
-        csp.planned_position = motors_[motor_id].actual_position;
-        csp.current_velocity = 0.0;
-        csp.target_velocity = 0.0;
-        csp.cycle_start_position = motors_[motor_id].actual_position;
-        csp.new_target_received = false;
-        csp.last_update = std::chrono::steady_clock::now();
-        csp.cycle_start = std::chrono::steady_clock::now();
+    // 初始化CSP参数（简化）
+    auto& csp = csp_params_[motor_id];
+    csp.enabled = true;
+    csp.current_target = motors_[motor_id].actual_position;
+    csp.segment_base_position = motors_[motor_id].actual_position;
+    csp.segment_tick = 0;
+    csp.step_residual = 0.0;
+    csp.v_cmd = 0.0;
         
         // 配置CSP模式
         int slave_id = motor_id + 1;
@@ -700,11 +709,10 @@ bool ERobMotorController::enableCSPFollow(int motor_id, bool enable) {
             return false;
         }
         
-        std::cout << "CSP follow mode enabled for motor " << motor_id 
-                  << ", initial position: " << csp.initial_position << std::endl;
+    std::cout << "CSP follow mode enabled for motor " << motor_id 
+          << ", initial position: " << motors_[motor_id].actual_position << std::endl;
     } else {
         csp_params_[motor_id].enabled = false;
-        csp_params_[motor_id].current_velocity = 0.0;
         std::cout << "CSP follow mode disabled for motor " << motor_id << std::endl;
     }
 
@@ -715,46 +723,7 @@ bool ERobMotorController::setCSPTargetPosition(int motor_id, int32_t target_posi
     if (!isValidMotorId(motor_id) || !csp_params_[motor_id].enabled) return false;
 
     std::lock_guard<std::mutex> lock(motor_data_mutex_);
-    
-    // 检查是否是新的目标位置
-    if (csp_params_[motor_id].current_target != target_position) {
-        csp_params_[motor_id].current_target = target_position;
-        csp_params_[motor_id].new_target_received = true;
-        csp_params_[motor_id].last_update = std::chrono::steady_clock::now();
-        
-        // 更新周期参数
-        updateCSPCycleParameters(motor_id);
-    }
-    
-    return true;
-}
-
-bool ERobMotorController::setCSPMotionParams(int motor_id, int32_t max_velocity, int32_t max_acceleration) {
-    if (!isValidMotorId(motor_id)) return false;
-
-    std::lock_guard<std::mutex> lock(motor_data_mutex_);
-    csp_params_[motor_id].max_velocity = max_velocity;
-    csp_params_[motor_id].max_acceleration = max_acceleration;
-    
-    std::cout << "CSP motion params set for motor " << motor_id 
-              << " - max_vel: " << max_velocity << ", max_acc: " << max_acceleration << std::endl;
-    
-    return true;
-}
-
-bool ERobMotorController::setCSPSmoothParams(int motor_id, double jerk_limit, double acceleration_time, double deceleration_time) {
-    if (!isValidMotorId(motor_id)) return false;
-
-    std::lock_guard<std::mutex> lock(motor_data_mutex_);
-    csp_params_[motor_id].jerk_limit = jerk_limit;
-    csp_params_[motor_id].acceleration_time = acceleration_time;
-    csp_params_[motor_id].deceleration_time = deceleration_time;
-    
-    std::cout << "CSP smooth params set for motor " << motor_id 
-              << " - jerk_limit: " << jerk_limit 
-              << ", acc_time: " << acceleration_time 
-              << ", dec_time: " << deceleration_time << std::endl;
-    
+    csp_params_[motor_id].current_target = target_position;
     return true;
 }
 
@@ -763,16 +732,92 @@ int32_t ERobMotorController::calculateCSPInterpolatedPosition(int motor_id) {
         return motors_[motor_id].actual_position;
     }
 
-    auto& csp = csp_params_[motor_id];
-    const auto& motor = motors_[motor_id];
-    
-    // 使用优化的运动规划算法
-    int32_t reachable_position = calculateReachablePosition(motor_id, csp.current_target, 0.001);  // 1ms周期
-    
-    // 更新规划位置
-    csp.planned_position = reachable_position;
-    
-    return reachable_position;
+    // 周期时长（秒）
+    const double dt = 1;
+
+    int32_t current = motors_[motor_id].actual_position;
+    int32_t target = csp_params_[motor_id].current_target;
+
+    // 每16个周期锁定一次基准位置（segment base）
+    auto &csp = csp_params_[motor_id];
+    if (csp.segment_tick % 16 == 0) {
+        csp.segment_base_position = current;
+    }
+
+    int32_t diff = target - csp.segment_base_position;
+    double raw_step_d = static_cast<double>(diff) / 16.0; // 未限幅的均分步长（浮点）
+
+    // 基于当前速度和加速度限制计算正/负方向的最大步长
+    const double v_cur = static_cast<double>(motors_[motor_id].actual_velocity); // counts/s
+    double v_inc_max = std::min(static_cast<double>(MAX_VELOCITY), v_cur + static_cast<double>(MAX_ACCELERATION) * dt);
+    double v_dec_min = std::max(-static_cast<double>(MAX_VELOCITY), v_cur - static_cast<double>(MAX_ACCELERATION) * dt);
+    double max_step_pos = v_inc_max * dt; // 本周期向正方向最大位移
+    double max_step_neg = v_dec_min * dt; // 本周期向负方向最大位移（为负数）
+
+    // 先按均分步长做限幅，再叠加小数残差以实现逐步累积
+    double limited_step_d = raw_step_d;
+    bool clamped = false;
+    if (limited_step_d > max_step_pos) { limited_step_d = max_step_pos; clamped = true; }
+    if (limited_step_d < max_step_neg) { limited_step_d = max_step_neg; clamped = true; }
+    double cmd_step_d = limited_step_d + csp.step_residual;
+
+    // 量化到整数步长并更新残差
+    int32_t step = (cmd_step_d >= 0.0) ? static_cast<int32_t>(std::floor(cmd_step_d))
+                                       : static_cast<int32_t>(std::ceil(cmd_step_d));
+    csp.step_residual = cmd_step_d - static_cast<double>(step);
+
+    // 不超过均分步长幅值，避免超过16段目标
+    if (std::abs(step) > std::abs(static_cast<int32_t>(std::round(raw_step_d)))) {
+        step = (raw_step_d > 0.0) ? std::abs(static_cast<int32_t>(std::round(raw_step_d)))
+                                  : -std::abs(static_cast<int32_t>(std::round(raw_step_d)));
+    }
+
+    // clamped 已在限幅时标记
+
+    // // 调试：段起点打印
+    // if (csp.segment_tick % 16 == 0) {
+    //     std::cout << "[CSP] motor=" << motor_id
+    //               << " seg_tick=" << csp.segment_tick
+    //               << " dt(s)=" << dt
+    //               << " cur=" << current
+    //               << " tgt=" << target
+    //               << " base=" << csp.segment_base_position
+    //               << " diff=" << diff
+    //               << " raw_step_d=" << raw_step_d
+    //               << " v_cur=" << v_cur
+    //               << " max_step_pos=" << max_step_pos
+    //               << " max_step_neg=" << max_step_neg
+    //               << " cmd_step_d=" << cmd_step_d
+    //               << " residual=" << csp.step_residual
+    //               << " step(out)=" << step
+    //               << " vel(tx)=" << motors_[motor_id].actual_velocity
+    //               << (clamped ? " CLAMPED" : "")
+    //               << std::endl;
+    // }
+    // // 调试：发生限幅时也打印
+    // if (clamped && (csp.segment_tick % 16 != 0)) {
+    //     std::cout << "[CSP] motor=" << motor_id
+    //               << " tick=" << csp.segment_tick
+    //               << " cur=" << current
+    //               << " tgt=" << target
+    //               << " base=" << csp.segment_base_position
+    //               << " diff=" << diff
+    //               << " raw_step_d=" << raw_step_d
+    //               << " v_cur=" << v_cur
+    //               << " max_step_pos=" << max_step_pos
+    //               << " max_step_neg=" << max_step_neg
+    //               << " cmd_step_d=" << cmd_step_d
+    //               << " residual=" << csp.step_residual
+    //               << " step(out)=" << step
+    //               << " vel(tx)=" << motors_[motor_id].actual_velocity
+    //               << " CLAMPED"
+    //               << std::endl;
+    // }
+
+    // 递增tick
+    csp.segment_tick = (csp.segment_tick + 1) & 0x7fffffff;
+
+    return current + step;
 }
 
 // 线程函数实现
@@ -915,65 +960,7 @@ void ERobMotorController::checkLoop() {
     std::cout << "Check loop stopped" << std::endl;
 }
 
-void ERobMotorController::cspFollowLoop() {
-    std::cout << "CSP follow loop started with " << CSP_FOLLOW_UPDATE_MS << "ms cycle" << std::endl;
-    
-    // 设置16ms精确周期
-    struct timespec ts, tleft;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    
-    const int64_t cycle_ns = CSP_FOLLOW_UPDATE_MS * 1000000;  // 16ms转换为纳秒
-    
-    // 对齐到下一个16ms边界
-    int ht = (ts.tv_nsec / cycle_ns) + 1;
-    ts.tv_nsec = ht * cycle_ns;
-    if (ts.tv_nsec >= NSEC_PER_SEC) {
-        ts.tv_sec++;
-        ts.tv_nsec -= NSEC_PER_SEC;
-    }
-    
-    while (running_) {
-        add_timespec(&ts, cycle_ns);
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, &tleft);
-        
-        // 处理每个启用CSP的电机
-        std::lock_guard<std::mutex> lock(motor_data_mutex_);
-        
-        for (int i = 0; i < getMotorCount(); i++) {
-            if (csp_params_[i].enabled) {
-                // 检查是否需要更新周期参数
-                auto now = std::chrono::steady_clock::now();
-                auto time_since_last_update = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - csp_params_[i].last_update).count();
-                
-                // 如果超过20ms没有收到新目标，可能需要减速停止
-                if (time_since_last_update > 20) {
-                    // 逐渐减速到停止
-                    if (std::abs(csp_params_[i].current_velocity) > 10) {
-                        double decel = csp_params_[i].max_acceleration * 0.016;  // 16ms内的减速量
-                        if (csp_params_[i].current_velocity > 0) {
-                            csp_params_[i].current_velocity = std::max(0.0, csp_params_[i].current_velocity - decel);
-                        } else {
-                            csp_params_[i].current_velocity = std::min(0.0, csp_params_[i].current_velocity + decel);
-                        }
-                    } else {
-                        csp_params_[i].current_velocity = 0.0;
-                    }
-                }
-                
-                // 输出调试信息（可选）
-                static int debug_counter = 0;
-                if ((debug_counter++ % 62) == 0) {  // 约每秒输出一次
-                    std::cout << "Motor " << i << " CSP - Target: " << csp_params_[i].current_target 
-                              << ", Planned: " << csp_params_[i].planned_position
-                              << ", Velocity: " << csp_params_[i].current_velocity << std::endl;
-                }
-            }
-        }
-    }
-    
-    std::cout << "CSP follow loop stopped" << std::endl;
-}
+// 已移除独立的CSP随动线程
 
 // 时钟同步函数
 void ERobMotorController::ec_sync(int64_t reftime, int64_t cycletime, int64_t* offsettime) {
@@ -1008,124 +995,4 @@ void ERobMotorController::add_timespec(struct timespec* ts, int64_t addtime) {
     }
 }
 
-// 视觉伺服运动规划算法实现
-
-int32_t ERobMotorController::calculateReachablePosition(int motor_id, int32_t target_position, double cycle_time_s) {
-    if (!isValidMotorId(motor_id)) return 0;
-    
-    auto& csp = csp_params_[motor_id];
-    const auto& motor = motors_[motor_id];
-    
-    int32_t current_position = motor.actual_position;
-    double current_velocity = csp.current_velocity;  // 使用规划的速度，而不是实际速度
-    
-    int32_t position_error = target_position - current_position;
-    double distance = std::abs(position_error);
-    int direction = (position_error > 0) ? 1 : -1;
-    
-    // 如果距离很小，直接返回目标位置
-    if (distance <= 5) {
-        csp.current_velocity = 0.0;
-        return target_position;
-    }
-    
-    // 使用梯形速度规划
-    double planned_velocity = calculateTrapezoidalVelocity(
-        current_position, target_position, current_velocity,
-        csp.max_velocity, csp.max_acceleration, cycle_time_s
-    );
-    
-    // 应用平滑加速度限制
-    planned_velocity = applySmoothAcceleration(
-        current_velocity, planned_velocity, csp.max_acceleration,
-        csp.jerk_limit, cycle_time_s
-    );
-    
-    // 更新当前规划速度
-    csp.current_velocity = planned_velocity;
-    
-    // 计算下一个位置
-    double displacement = planned_velocity * cycle_time_s;
-    int32_t next_position = current_position + static_cast<int32_t>(displacement);
-    
-    // 确保不超过目标位置
-    if (direction > 0) {
-        next_position = std::min(next_position, target_position);
-    } else {
-        next_position = std::max(next_position, target_position);
-    }
-    
-    return next_position;
-}
-
-double ERobMotorController::calculateTrapezoidalVelocity(double current_pos, double target_pos, double current_vel,
-                                                        double max_vel, double max_acc, double cycle_time) {
-    double position_error = target_pos - current_pos;
-    double distance = std::abs(position_error);
-    int direction = (position_error > 0) ? 1 : -1;
-    
-    // 计算到目标位置的理想速度（忽略当前速度）
-    double ideal_vel = direction * std::sqrt(2.0 * max_acc * distance);
-    
-    // 限制在最大速度范围内
-    ideal_vel = std::max(-max_vel, std::min(max_vel, ideal_vel));
-    
-    // 如果需要减速到停止
-    double stop_distance = (current_vel * current_vel) / (2.0 * max_acc);
-    if (distance <= stop_distance * 1.2) {  // 提前开始减速
-        // 减速阶段
-        double decel_vel = current_vel - direction * max_acc * cycle_time;
-        if (direction > 0) {
-            return std::max(0.0, decel_vel);
-        } else {
-            return std::min(0.0, decel_vel);
-        }
-    }
-    
-    // 正常加速或减速到理想速度
-    double velocity_error = ideal_vel - current_vel;
-    double max_vel_change = max_acc * cycle_time;
-    
-    if (std::abs(velocity_error) <= max_vel_change) {
-        return ideal_vel;
-    } else {
-        return current_vel + (velocity_error > 0 ? max_vel_change : -max_vel_change);
-    }
-}
-
-double ERobMotorController::applySmoothAcceleration(double current_vel, double target_vel, double max_acc,
-                                                   double jerk_limit, double cycle_time) {
-    double velocity_error = target_vel - current_vel;
-    double max_vel_change = max_acc * cycle_time;
-    
-    // 应用jerk限制的平滑加速度
-    double jerk_limited_acc = jerk_limit * cycle_time * cycle_time;
-    max_vel_change = std::min(max_vel_change, jerk_limited_acc);
-    
-    if (std::abs(velocity_error) <= max_vel_change) {
-        return target_vel;
-    } else {
-        return current_vel + (velocity_error > 0 ? max_vel_change : -max_vel_change);
-    }
-}
-
-void ERobMotorController::updateCSPCycleParameters(int motor_id) {
-    if (!isValidMotorId(motor_id)) return;
-    
-    auto& csp = csp_params_[motor_id];
-    auto now = std::chrono::steady_clock::now();
-    
-    // 更新周期参数
-    if (csp.new_target_received) {
-        csp.cycle_start = now;
-        csp.cycle_start_position = motors_[motor_id].actual_position;
-        csp.previous_target = csp.current_target;
-        csp.new_target_received = false;
-        
-        // 重置速度如果目标位置变化很大
-        int32_t target_change = std::abs(csp.current_target - csp.previous_target);
-        if (target_change > csp.max_velocity * csp.cycle_time_s * 2) {
-            csp.current_velocity = 0.0;  // 大幅度目标变化时重置速度
-        }
-    }
-}
+// 已移除复杂的视觉伺服运动规划相关函数
